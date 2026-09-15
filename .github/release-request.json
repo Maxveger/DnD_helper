@@ -1,0 +1,8 @@
+{
+  "tag": "v0.1.0-rc.1",
+  "commit": "c982eab22f671f2cd24d844a56aa6f609dd97290",
+  "run_id": 34968229530,
+  "artifact_id": 10396560528,
+  "artifact_sha256": "05a8492ad3f78f6473a63806146ac7404c250cc099192ad0ec2518a25f803fbe",
+  "notes": "docs/releases/v0.1.0-rc.1.md"
+}
