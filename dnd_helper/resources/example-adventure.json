@@ -1,0 +1,471 @@
+{
+  "format": "dnd-adventure@1",
+  "id": "last_signal",
+  "version": "1.0.0",
+  "title": "Последний сигнал",
+  "summary": "На далёкой станции пропал сигнал маяка. Выясните причину и выберите судьбу станции.",
+  "lore": "Люди путешествуют между орбитальными станциями. Маяки помогают кораблям находить безопасный путь.",
+  "gm_notes": "Все новички. Начни с описания ангара. Если игроки растерялись, предложи осмотреть журнал. Не сообщай причину аварии до открытия записи. Стража можно отключить кодом или преодолеть в абстрактной схватке: каждый бросок — обмен ударами, без очереди инициативы.",
+  "duration_minutes": 35,
+  "min_players": 1,
+  "max_players": 2,
+  "rules": {
+    "engine": "declarative@1",
+    "name": "Космическая история · d6",
+    "dice": 6,
+    "summary": "Проверка: d6 + характеристика ≥ сложности. При 0 HP герой не действует; союзник или ведущий может помочь. Обычные действия без броска. В схватке каждый бросок — обмен ударами: успех снижает прочность дрона на 2, неудача снимает у героя 1 HP. Отступление свободное. Аптечка восстанавливает до 3 HP. Это упрощённые правила, без инициативы.",
+    "attributes": {
+      "tech": "Техника",
+      "sense": "Наблюдательность",
+      "force": "Сила"
+    }
+  },
+  "start": "hangar",
+  "characters": {
+    "lea": {
+      "name": "Лея",
+      "role": "Инженер",
+      "description": "Чинит старые приборы.",
+      "max_hp": 6,
+      "stats": {
+        "tech": 2,
+        "sense": 1,
+        "force": 0
+      },
+      "items": [
+        "medkit"
+      ]
+    },
+    "jan": {
+      "name": "Ян",
+      "role": "Разведчик",
+      "description": "Находит безопасные пути.",
+      "max_hp": 7,
+      "stats": {
+        "tech": 0,
+        "sense": 2,
+        "force": 1
+      },
+      "items": [
+        "medkit"
+      ]
+    }
+  },
+  "scenes": {
+    "hangar": {
+      "name": "Ангар",
+      "text": "За шлюзом пустой ангар. На пульте мигает журнал событий.",
+      "prompt": "Посмотрите журнал или пройдёте к ретранслятору?",
+      "secret": "Автоматика перекрыла питание после метеоритного удара.",
+      "hint": "Предложи прочитать журнал: это не требует броска.",
+      "exits": [
+        {
+          "to": "relay"
+        }
+      ]
+    },
+    "relay": {
+      "name": "Ретранслятор",
+      "text": "За искрящим щитом лежит запасная батарея. Дрон охраняет проход к куполу.",
+      "prompt": "Осмотрите щит или попробуете отключить дрона?",
+      "secret": "Код из журнала отключает дрона без боя. Батарею можно забрать свободно.",
+      "hint": "Бой необязателен: вернитесь к журналу за кодом.",
+      "exits": [
+        {
+          "to": "hangar"
+        },
+        {
+          "to": "dome",
+          "when": [
+            {
+              "kind": "variable",
+              "ref": "drone_hp",
+              "op": "eq",
+              "value": 0,
+              "who": "actor"
+            }
+          ]
+        }
+      ]
+    },
+    "dome": {
+      "name": "Купол маяка",
+      "text": "За стеклом сияют звёзды. В панели пустое гнездо питания.",
+      "prompt": "Восстановите маяк или эвакуируетесь?",
+      "secret": "Ремонт безопасен после настройки щита.",
+      "hint": "Нужны настроенный щит и батарея. Можно вернуться за ними.",
+      "exits": [
+        {
+          "to": "relay"
+        }
+      ]
+    }
+  },
+  "npcs": {
+    "echo": {
+      "name": "Эхо",
+      "public": "Голос станции отвечает короткими фразами.",
+      "secret": "Запрет на запуск связан с неисправностью, а не злым умыслом.",
+      "scenes": [
+        "hangar",
+        "relay",
+        "dome"
+      ]
+    }
+  },
+  "items": {
+    "medkit": "Аптечка",
+    "battery": "Батарея"
+  },
+  "clues": {
+    "log": "Станцию повредил метеорит. Код отключения дрона: 314."
+  },
+  "variables": {
+    "aligned": {
+      "initial": false
+    },
+    "battery_place": {
+      "initial": "relay",
+      "choices": [
+        "relay",
+        "carried",
+        "installed"
+      ]
+    },
+    "drone_hp": {
+      "initial": 4,
+      "minimum": 0,
+      "maximum": 4
+    }
+  },
+  "objectives": [
+    {
+      "text": "Узнать причину аварии",
+      "when": [
+        {
+          "kind": "clue",
+          "ref": "log",
+          "op": "eq",
+          "value": true,
+          "who": "actor"
+        }
+      ]
+    },
+    {
+      "text": "Настроить питание",
+      "when": [
+        {
+          "kind": "variable",
+          "ref": "aligned",
+          "op": "eq",
+          "value": true,
+          "who": "actor"
+        }
+      ]
+    },
+    {
+      "text": "Установить батарею",
+      "when": [
+        {
+          "kind": "variable",
+          "ref": "battery_place",
+          "op": "eq",
+          "value": "installed",
+          "who": "actor"
+        }
+      ]
+    }
+  ],
+  "endings": {
+    "restored": {
+      "name": "Маяк снова светит",
+      "text": "На горизонте появляется корабль: он получил ваш сигнал. Станция спасена."
+    },
+    "evacuated": {
+      "name": "Безопасное возвращение",
+      "text": "Вы уходите на шаттле, передав координаты ремонтной службе. Все живы."
+    }
+  },
+  "actions": {
+    "read_log": {
+      "name": "Прочитать журнал",
+      "description": "Прочитать журнал",
+      "scenes": [
+        "hangar"
+      ],
+      "success": {
+        "text": "В журнале описан метеоритный удар и записан код 314.",
+        "effects": [
+          {
+            "op": "reveal",
+            "ref": "log"
+          }
+        ]
+      },
+      "once": true
+    },
+    "align": {
+      "name": "Настроить щит",
+      "description": "Настроить щит",
+      "scenes": [
+        "relay"
+      ],
+      "success": {
+        "text": "Щит перестаёт искрить. Питание готово.",
+        "effects": [
+          {
+            "op": "set",
+            "ref": "aligned",
+            "value": true
+          }
+        ]
+      },
+      "check": {
+        "stat": "tech",
+        "dc": 4
+      },
+      "failure": {
+        "text": "Не сразу, но с подсказкой на корпусе щит удаётся настроить. Осколок царапает руку: −1 HP.",
+        "effects": [
+          {
+            "op": "set",
+            "ref": "aligned",
+            "value": true
+          },
+          {
+            "op": "hp",
+            "value": -1
+          }
+        ]
+      },
+      "once": true
+    },
+    "disable": {
+      "name": "Ввести код дрона",
+      "description": "Ввести код дрона",
+      "scenes": [
+        "relay"
+      ],
+      "success": {
+        "text": "Дрон принимает код и складывает манипуляторы.",
+        "effects": [
+          {
+            "op": "set",
+            "ref": "drone_hp",
+            "value": 0
+          }
+        ]
+      },
+      "requires": [
+        {
+          "kind": "clue",
+          "ref": "log",
+          "op": "eq",
+          "value": true,
+          "who": "actor"
+        }
+      ],
+      "blocked": "Сначала прочитайте журнал в ангаре.",
+      "once": true
+    },
+    "fight": {
+      "name": "Пробиться мимо дрона",
+      "description": "Пробиться мимо дрона",
+      "scenes": [
+        "relay"
+      ],
+      "success": {
+        "text": "Удар повреждает корпус дрона: −2 прочности.",
+        "effects": [
+          {
+            "op": "increment",
+            "ref": "drone_hp",
+            "value": -2
+          }
+        ]
+      },
+      "requires": [
+        {
+          "kind": "variable",
+          "ref": "drone_hp",
+          "op": "gte",
+          "value": 1,
+          "who": "actor"
+        }
+      ],
+      "check": {
+        "stat": "force",
+        "dc": 4
+      },
+      "failure": {
+        "text": "Дрон отталкивает героя: −1 HP. Можно отступить или воспользоваться кодом.",
+        "effects": [
+          {
+            "op": "hp",
+            "value": -1
+          }
+        ]
+      }
+    },
+    "take_battery": {
+      "name": "Забрать батарею",
+      "description": "Забрать батарею",
+      "scenes": [
+        "relay"
+      ],
+      "success": {
+        "text": "Вы забираете запасную батарею.",
+        "effects": [
+          {
+            "op": "give",
+            "ref": "battery"
+          },
+          {
+            "op": "set",
+            "ref": "battery_place",
+            "value": "carried"
+          }
+        ]
+      },
+      "requires": [
+        {
+          "kind": "variable",
+          "ref": "battery_place",
+          "op": "eq",
+          "value": "relay",
+          "who": "actor"
+        }
+      ]
+    },
+    "install": {
+      "name": "Установить батарею",
+      "description": "Установить батарею",
+      "scenes": [
+        "dome"
+      ],
+      "success": {
+        "text": "Батарея встаёт в гнездо.",
+        "effects": [
+          {
+            "op": "take",
+            "ref": "battery"
+          },
+          {
+            "op": "set",
+            "ref": "battery_place",
+            "value": "installed"
+          }
+        ]
+      },
+      "requires": [
+        {
+          "kind": "item",
+          "ref": "battery",
+          "op": "eq",
+          "value": true,
+          "who": "actor"
+        }
+      ],
+      "blocked": "Действовать должен герой с батареей."
+    },
+    "start": {
+      "name": "Включить маяк",
+      "description": "Включить маяк",
+      "scenes": [
+        "dome"
+      ],
+      "success": {
+        "text": "Луч маяка прорезает темноту.",
+        "effects": [
+          {
+            "op": "end",
+            "ref": "restored"
+          }
+        ]
+      },
+      "requires": [
+        {
+          "kind": "variable",
+          "ref": "aligned",
+          "op": "eq",
+          "value": true,
+          "who": "actor"
+        },
+        {
+          "kind": "variable",
+          "ref": "battery_place",
+          "op": "eq",
+          "value": "installed",
+          "who": "actor"
+        }
+      ],
+      "blocked": "Сначала настройте щит и установите батарею."
+    },
+    "evacuate": {
+      "name": "Эвакуироваться",
+      "description": "Эвакуироваться",
+      "scenes": [
+        "hangar",
+        "dome"
+      ],
+      "success": {
+        "text": "Вы выбираете безопасное возвращение.",
+        "effects": [
+          {
+            "op": "end",
+            "ref": "evacuated"
+          }
+        ]
+      }
+    },
+    "heal": {
+      "name": "Применить аптечку",
+      "description": "Применить аптечку",
+      "scenes": [
+        "hangar",
+        "relay",
+        "dome"
+      ],
+      "success": {
+        "text": "Аптечка восстанавливает до 3 HP выбранному герою.",
+        "effects": [
+          {
+            "op": "take",
+            "ref": "medkit"
+          },
+          {
+            "op": "hp",
+            "who": "target",
+            "value": 3
+          }
+        ]
+      },
+      "target": "any",
+      "requires": [
+        {
+          "kind": "item",
+          "ref": "medkit",
+          "op": "eq",
+          "value": true,
+          "who": "actor"
+        }
+      ]
+    },
+    "shortcut": {
+      "name": "Вернуться через технический шлюз",
+      "description": "Вернуться через технический шлюз",
+      "scenes": [
+        "dome"
+      ],
+      "success": {
+        "text": "Вы проходите по техническому коридору в ангар.",
+        "effects": [
+          {
+            "op": "move",
+            "ref": "hangar"
+          }
+        ]
+      }
+    }
+  }
+}

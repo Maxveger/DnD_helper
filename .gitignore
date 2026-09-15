@@ -1,0 +1,39 @@
+# Local credentials
+.env
+.env.*
+!.env.example
+settings.local.json
+secrets.local.json
+
+# Runtime state and private session data
+/data/
+/logs/
+/backups/
+/exports/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.log
+
+# Local environments and generated builds
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+node_modules/
+/build/
+/dist/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
