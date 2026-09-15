@@ -4,7 +4,7 @@
 
 Разработка ведётся на Linux. Приложение должно работать локально у ведущего на Windows 10 или 11. Ключ GPT API и токен Telegram-бота передаются пользователем отдельно от исходников и сборки. Предполагаемый канал передачи — GitHub.
 
-Ниже — требования к поставке. Скрипты сборки и проверок, архивирования исходников и workflow Linux/Windows реализованы. Windows-пакет собран и проверен в [GitHub Actions](https://github.com/Maxveger/DnD_helper/actions/runs/34968229530); доступен как артефакт. GitHub Release ещё не опубликован, запуск на целевом ноутбуке предстоит. Актуальные команды — в [README](../README.md), пользовательская инструкция — в [PLAYER_SETUP.md](PLAYER_SETUP.md).
+Ниже — требования к поставке. Скрипты сборки и проверок, архивирования исходников и workflow Linux/Windows реализованы. Windows-пакет собран и проверен в [GitHub Actions](https://github.com/Maxveger/DnD_helper/actions/runs/34968229530); доступен как артефакт. Опубликован [предварительный выпуск v0.1.0-rc.1](https://github.com/Maxveger/DnD_helper/releases/tag/v0.1.0-rc.1); запуск на целевом ноутбуке предстоит. Актуальные команды — в [README](../README.md), пользовательская инструкция — в [PLAYER_SETUP.md](PLAYER_SETUP.md).
 
 ## Сценарий ведущего
 
@@ -62,7 +62,7 @@
 
 PyInstaller создаёт пакет для ОС сборки и не является кросс-компилятором: [официальная документация](https://www.pyinstaller.org/en/stable/). Поэтому разработка на Linux не заменяет Windows-сборку. GitHub Actions позволяет собирать и передавать артефакты между заданиями: [документация GitHub](https://docs.github.com/en/actions/tutorials/store-and-share-data).
 
-Исходники опубликованы в [Maxveger/DnD_helper](https://github.com/Maxveger/DnD_helper). Пакет скачивается из Artifacts успешного запуска Actions; для постоянной ссылки его можно прикрепить к выпуску. [Инструкция по Git и скачиванию](GIT_WORKFLOW.md).
+Исходники опубликованы в [Maxveger/DnD_helper](https://github.com/Maxveger/DnD_helper). Проверенный пакет доступен в [Releases](https://github.com/Maxveger/DnD_helper/releases/tag/v0.1.0-rc.1); промежуточные сборки — в Artifacts успешных запусков Actions. [Инструкция по Git и скачиванию](GIT_WORKFLOW.md).
 
 ## Проверка поставки
 
