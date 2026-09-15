@@ -179,7 +179,9 @@ def test_rejects_unsupported_mechanics_and_broken_references(tmp_path, doc, chan
 
 
 @pytest.mark.parametrize(
-    "text", ['{"format":1,"format":2}', "{bad", 'hello {"a":1}', "[]", '{"x":NaN}', "[" * 2000, "я" * 260000]
+    "text",
+    ['{"format":1,"format":2}', "{bad", 'hello {"a":1}', "[]", '{"x":NaN}', "[" * 2000, "я" * 260000],
+    ids=["duplicate-key", "invalid-json", "chat-prose", "array", "nan", "deep-nesting", "oversized-unicode"],
 )
 def test_parser_returns_actionable_errors(text):
     report, document = validate_document(text)

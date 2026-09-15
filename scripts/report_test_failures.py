@@ -17,7 +17,13 @@ def main():
     root = ElementTree.parse(report).getroot()
     for case in root.iter("testcase"):
         for failure in [*case.findall("failure"), *case.findall("error")]:
-            text = case.get("name", "test") + "\n" + (failure.text or failure.get("message", ""))
+            name = case.get("name", "test")[:200]
+            lines = (failure.text or failure.get("message", "")).splitlines()
+            lines = [
+                line if len(line) <= 800 else line[:500] + " ... [long value omitted] ... " + line[-200:]
+                for line in lines
+            ]
+            text = name + "\n" + "\n".join(lines)
             print("::error::" + escape(text[-10000:]))
 
 
