@@ -24,8 +24,9 @@ def console_message(text, stream):
 class InstanceLock:
     def __init__(self, directory):
         self.file = (directory / "instance.lock").open("a+b")
-        self.file.seek(0)
-        if not self.file.read(1):
+        # Windows byte-range locks prohibit reading the locked byte too.
+        # File metadata is safe to inspect before attempting to acquire the lock.
+        if os.fstat(self.file.fileno()).st_size == 0:
             self.file.write(b"0")
             self.file.flush()
         self.file.seek(0)
