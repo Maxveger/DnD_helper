@@ -4,7 +4,7 @@ import json
 import sqlite3
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .rules import GameError
@@ -88,7 +88,7 @@ class Store:
         folder = self.path.parent / "backups"
         folder.mkdir(exist_ok=True)
         target = folder / f"game-{time.time_ns()}.sqlite3"
-        with self.connect() as db, sqlite3.connect(target) as dest:
+        with self.connect() as db, closing(sqlite3.connect(target)) as dest:
             db.backup(dest)
         return target
 

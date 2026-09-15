@@ -28,22 +28,22 @@ jobs:
       - name: Explain test failures
         if: failure()
         run: python scripts/report_test_failures.py build/test-results.xml
-      - run: uv run --frozen python scripts/smoke.py
+      - run: python scripts/ci_command.py uv run --frozen python scripts/smoke.py
       - name: Build Windows package
         if: runner.os == 'Windows'
-        run: uv run --frozen python scripts/build.py
+        run: python scripts/ci_command.py uv run --frozen python scripts/build.py
       - name: Check frozen Windows application
         if: runner.os == 'Windows'
-        run: uv run --frozen python scripts/smoke.py --executable dist/DnD-Helper/DnD-Helper.exe
+        run: python scripts/ci_command.py uv run --frozen python scripts/smoke.py --executable dist/DnD-Helper/DnD-Helper.exe
       - name: Install browser for Windows acceptance
         if: runner.os == 'Windows'
         run: uv run --frozen playwright install chromium
       - name: Check imported story in frozen Windows browser UI
         if: runner.os == 'Windows'
-        run: uv run --frozen python scripts/browser_import_check.py --executable dist/DnD-Helper/DnD-Helper.exe
+        run: python scripts/ci_command.py uv run --frozen python scripts/browser_import_check.py --executable dist/DnD-Helper/DnD-Helper.exe
       - name: Package source code
         if: runner.os == 'Windows'
-        run: uv run --frozen python scripts/source_archive.py
+        run: python scripts/ci_command.py uv run --frozen python scripts/source_archive.py
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Windows'
         with:

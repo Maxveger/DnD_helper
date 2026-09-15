@@ -14,6 +14,13 @@ from pathlib import Path
 from .config import data_directory
 
 
+def console_message(text, stream):
+    if stream is not None:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="backslashreplace").decode(encoding) + "\n")
+        stream.flush()
+
+
 class InstanceLock:
     def __init__(self, directory):
         self.file = (directory / "instance.lock").open("a+b")
@@ -92,8 +99,7 @@ def _main():
 
         if not args.no_browser:
             threading.Thread(target=open_when_ready, daemon=True).start()
-        if sys.stdout:
-            print(f"DnD Helper: {url}\nДанные: {folder}", flush=True)
+        console_message(f"DnD Helper: {url}\nДанные: {folder}", sys.stdout)
         server.run(sockets=[sock])
     finally:
         sock.close()
@@ -109,12 +115,12 @@ def main():
             "Не удалось запустить DnD Helper. Проверьте доступ к папке данных и файл settings.local.json. "
             f"Тип ошибки: {type(exc).__name__}. Подробности ключей не выводятся."
         )
-        if os.name == "nt":
+        if os.name == "nt" and "--no-browser" not in sys.argv:
             import ctypes
 
             ctypes.windll.user32.MessageBoxW(None, message, "DnD Helper", 0x10)
-        elif sys.stderr:
-            print(message, file=sys.stderr)
+        else:
+            console_message(message, sys.stderr)
         raise SystemExit(1) from None
 
 

@@ -315,3 +315,33 @@ def test_rules_can_be_replaced_without_changing_game_commands(tmp_path):
     assert "careful" not in state["clues"]  # same commands, different rule result
     with pytest.raises(GameError):
         Engine(engine.store).command("pause", {})  # cannot open it with the wrong rules
+
+
+def test_backup_closes_destination_connection(engine, monkeypatch):
+    import sqlite3
+    from pathlib import Path
+
+    original_connect = sqlite3.connect
+    destinations = []
+
+    class TrackedConnection(sqlite3.Connection):
+        closed = False
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    def connect(path, *args, **kwargs):
+        if Path(path).parent.name == "backups":
+            connection = original_connect(path, *args, factory=TrackedConnection, **kwargs)
+            destinations.append(connection)
+            return connection
+        return original_connect(path, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    target = engine.store.backup()
+    assert destinations and all(c.closed for c in destinations)
+    # A complete backup remains readable after the destination is explicitly closed.
+    from dnd_helper.storage import Store
+
+    assert Store(target).read() == engine.store.read()
