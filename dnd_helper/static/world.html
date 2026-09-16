@@ -15,11 +15,15 @@
   <section class="connection">
     <div><strong>Подключение по подписке ChatGPT</strong><p id="connection-status" role="status">Проверяем вход…</p></div>
     <div class="buttons"><button id="check-login">Проверить вход</button><button id="login">Войти через ChatGPT</button></div>
+    <div class="model-choice"><label for="world-model">Модель для игры</label>
+      <select id="world-model" aria-describedby="model-note"></select>
+      <span id="model-note" class="muted">Выбор сохраняется только в приложении. Во время хода модель не меняется.</span>
+    </div>
     <details><summary>Как подключить на другом компьютере</summary>
       <p>Установите официальный Codex CLI и перезапустите приложение. Нажмите «Войти через ChatGPT» и завершите вход в своём аккаунте с доступом к Codex. Пароль и ключ в это приложение вводить не нужно.</p>
       <p>Если окно входа не открылось, выполните <code>codex login</code> в терминале, затем «Проверить вход».</p>
       <a href="https://developers.openai.com/codex/cli" target="_blank" rel="noopener noreferrer">Установка Codex</a>
-      <p>Используется модель из настроек вашего Codex. Лимит подписки проверяется в Codex; автоматического перехода на платный API нет.</p>
+      <p>Модель для игры выбирается на этой странице; личные настройки Codex остаются прежними. Лимит подписки проверяется в Codex; автоматического перехода на платный API нет.</p>
     </details>
   </section>
   <p id="error" role="alert" hidden></p>

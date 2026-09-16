@@ -27,6 +27,11 @@ class Command(BaseModel):
     revision: int | None = None
 
 
+class WorldModelInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str = Field(max_length=100)
+
+
 class AdventureInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(max_length=MAX_DOCUMENT_BYTES)
@@ -111,6 +116,10 @@ def create_app(directory=None, background=True, shutdown=None):
     @app.get("/api/world")
     def world_state():
         return service.free_world.view()
+
+    @app.post("/api/world/model")
+    def world_model(body: WorldModelInput):
+        return service.free_world.set_model(body.model)
 
     @app.post("/api/world/command")
     def world_command(body: Command):

@@ -49,6 +49,17 @@ function render(force = false) {
   $('table').hidden = !g; $('new').textContent = g ? 'Начать заново' : 'Начать короткую игру';
   $('new').disabled = sending || !!p || state?.busy;
   $('undo').hidden = !g; $('undo').disabled = sending || !!p || !g?.events.length;
+  if ($('world-model').options.length !== Object.keys(state.models || {}).length) {
+    $('world-model').replaceChildren();
+    for (const [id, label] of Object.entries(state.models || {})) {
+      const option = document.createElement('option'); option.value = id; option.textContent = label;
+      $('world-model').append(option);
+    }
+  }
+  $('world-model').value = state.model;
+  $('world-model').disabled = sending || !!p || state.busy;
+  const activeModel = p?.model || [...(g?.calls || [])].reverse().find(c => c.action === p?.action?.id)?.model;
+  $('model-note').textContent = p ? `Текущий ход: ${activeModel || 'ранее выбранная модель'}. Выбор доступен после завершения хода.` : 'Выбор сохраняется только в приложении. Настройки Codex для разработки не меняются.';
   if (!g) return;
   $('send').disabled = sending || !!p || state.busy || !connected;
   $('next').textContent = p ? 'Сначала завершите или отмените текущий ход.' : !connected ? 'Сначала подключите Codex.' : '';
@@ -124,3 +135,11 @@ $('undo').onclick=()=>command('undo');
 $('action-form').onsubmit=e=>{e.preventDefault();command('submit',{actor:'mira',text:$('action').value});};
 async function refresh(){try{state=await api('world');render();}catch(e){error(e);}finally{setTimeout(refresh,900);}}
 refresh(); connection();
+
+$('world-model').onchange = async () => {
+  if(sending) return;
+  sending = true; $('error').hidden = true;
+  try { state = await api('world/model', {model: $('world-model').value}); }
+  catch(e) { error(e); }
+  finally { sending = false; render(true); }
+};

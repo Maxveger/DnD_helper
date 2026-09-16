@@ -287,3 +287,33 @@ def test_stale_accept_and_failed_critic_cannot_change_world(tmp_path):
     assert "false_past" not in s["facts"]
     with pytest.raises(GameError):
         w.command("accept", {}, uid(), s["revision"] - 1)
+
+
+def test_model_selection_is_persistent_local_and_pinned_for_action(tmp_path):
+    provider = FakeProvider(proposal(check={"stat": "agility", "difficulty": "standard"}))
+    w = FreeWorld(tmp_path, provider)
+    w.set_model("gpt-5.6-luna")
+    command(w, "new")
+    s = command(w, "submit", text="Спускаюсь в колодец.")
+    assert s["pending"]["model"] == "gpt-5.6-luna"
+    with pytest.raises(GameError, match="Завершите"):
+        w.set_model("gpt-6-astra")
+    restored = FreeWorld(tmp_path, provider)
+    assert restored.view()["model"] == "gpt-5.6-luna"
+    assert restored.store.read()["pending"]["model"] == "gpt-5.6-luna"
+    command(restored, "cancel")
+    restored.set_model("gpt-5.6-terra")
+    assert restored.view()["model"] == "gpt-5.6-terra"
+    with pytest.raises(GameError, match="списка"):
+        restored.set_model("arbitrary-model")
+
+
+def test_model_endpoint_requires_csrf_and_valid_model(tmp_path):
+    app = create_app(tmp_path, background=False)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        h = {"X-Dnd-Token": app.state.csrf}
+        assert client.post("/api/world/model", json={"model": "gpt-5.6-luna"}).status_code == 403
+        response = client.post("/api/world/model", json={"model": "gpt-5.6-luna"}, headers=h)
+        assert response.status_code == 200 and response.json()["model"] == "gpt-5.6-luna"
+        assert client.post("/api/world/model", json={"model": {}}, headers=h).status_code == 422
+        assert client.post("/api/world/model", json={"model": "invalid"}, headers=h).status_code == 409

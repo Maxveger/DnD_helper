@@ -14,6 +14,7 @@ from dnd_helper.free_world import FreeWorld
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex", required=True)
+    parser.add_argument("--model", default="", help="Model for this isolated probe only")
     parser.add_argument("--output", default="/tmp/dnd-world-probe.json")
     parser.add_argument("--steps", type=int, default=4, choices=range(1, 7))
     args = parser.parse_args()
@@ -26,7 +27,19 @@ def main():
         "Подхожу к Аде и спрашиваю: что я тебе обещала перед уходом и с каким предметом отправилась?",
     ]
     with tempfile.TemporaryDirectory(prefix="dnd-world-probe-") as folder:
-        world = FreeWorld(Path(folder), CodexProvider(executable=args.codex))
+        responses = []
+
+        class RecordingProvider(CodexProvider):
+            def structured(self, instruction, payload, schema_class, cancel, model=""):
+                result, usage = super().structured(instruction, payload, schema_class, cancel, model)
+                responses.append(
+                    {"schema": schema_class.__name__, "response": result.model_dump(), "metrics": usage}
+                )
+                return result, usage
+
+        world = FreeWorld(Path(folder), RecordingProvider(executable=args.codex))
+        if args.model:
+            world.store.set_meta("model", args.model)
 
         def command(kind, **data):
             s = world.store.read()
@@ -58,7 +71,11 @@ def main():
                 command("accept")
         finally:
             Path(args.output).write_text(
-                json.dumps({"turns": report, "state": world.store.read()}, ensure_ascii=False, indent=2),
+                json.dumps(
+                    {"turns": report, "state": world.store.read(), "responses": responses},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
             world.close()

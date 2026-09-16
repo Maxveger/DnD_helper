@@ -116,7 +116,10 @@ PLANNER = """Ты помощник ведущего ролевой игры на
 В evidence перечисли реальные ID фактов-оснований. Нельзя изменять старый факт: remember добавляет новый.
 Обещания записывай status=promise, выполненные закрывай resolve_promise. Ложь и слухи не становятся fact.
 Значимые сведения разговора сохраняй remember, чтобы следующая независимая генерация их помнила.
-Новые места/NPC/предметы можно создать create с новыми ID, не дублируя существующих. Новый предмет возникает
+Новые места/NPC/предметы можно создать create с новыми ID, не дублируя существующих.
+Неописанные окрестности открыты для импровизации: предложи совместимые новые детали сам, а не проси
+ведущего решить, существует ли обычное место или предмет. Это новое предложение, а не переписывание прошлого.
+Безопасный осмотр без препятствия и существенной цены провала не требует броска ради самого поиска. Новый предмет возникает
 в месте или у NPC, затем transfer при получении. Новый location связан с location родителя, герой переходит move.
 create не может создавать персонажей-героев; неизвестная способность требует вопроса ведущему.
 Все ссылки должны существовать или создаваться раньше в той же ветке. Не создавай игровые предметы одним текстом.
@@ -399,6 +402,16 @@ def narrative_context(world, pending, outcome):
     }
 
 
+# Application selection is independent of the operator's Codex coding settings.
+DEFAULT_MODEL = "gpt-5.6-luna"
+WORLD_MODELS = {
+    "gpt-5.6-luna": "Luna — экономная",
+    "gpt-5.6-terra": "Terra — сбалансированная",
+    "gpt-6-astra": "Astra — сложные задачи",
+    "": "Из настроек Codex",
+}
+
+
 class FreeWorld:
     def __init__(self, directory, provider=None):
         self.store = Store(directory / "free-world.sqlite3")
@@ -419,9 +432,21 @@ class FreeWorld:
     def view(self):
         return {
             "game": self.store.read(),
-            "model": self.store.get_meta("model", ""),
+            "model": self.store.get_meta("model", DEFAULT_MODEL),
+            "models": WORLD_MODELS,
             "busy": bool(self.thread and self.thread.is_alive()),
         }
+
+    def set_model(self, model):
+        with self.lock:
+            require(model in WORLD_MODELS, "Выберите модель из списка.")
+            state = self.store.read()
+            require(
+                not (state and state["pending"]) and not (self.thread and self.thread.is_alive()),
+                "Завершите или отмените текущий ход перед сменой модели.",
+            )
+            self.store.set_meta("model", model)
+            return self.view()
 
     def update_pending(self, pid, fn):
         def change(s, db):
@@ -465,6 +490,8 @@ class FreeWorld:
                         "action": {"id": uid(), "actor": actor, "text": text.strip()},
                         "epoch": s["epoch"],
                         "attempts": 1,
+                        "model": self.store.get_meta("model", DEFAULT_MODEL)
+                        or getattr(self.provider, "selected_model", lambda: "")(),
                     }
                     run = "plan"
                 elif kind == "cancel":
@@ -571,7 +598,11 @@ class FreeWorld:
         details = {"status": "error"}
         try:
             result, details = self.provider.structured(
-                instruction, payload, schema, cancel, self.store.get_meta("model", "")
+                instruction,
+                payload,
+                schema,
+                cancel,
+                state["pending"].get("model", self.store.get_meta("model", "")),
             )
             details["status"] = "completed"
             return result

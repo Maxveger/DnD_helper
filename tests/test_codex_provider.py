@@ -27,6 +27,10 @@ if "login" in args:
 prompt=sys.stdin.read()
 assert prompt and args[-1]=="-"
 assert "--ignore-user-config" in args and "--ephemeral" in args
+assert any(arg.startswith("model_instructions_file=") for arg in args)
+role_arg=next(arg for arg in args if arg.startswith("model_instructions_file="))
+role=open(json.loads(role_arg.split("=",1)[1]),encoding="utf-8").read()
+assert "Do not invoke tools" in role
 assert "CODEX_API_KEY" not in os.environ and "OPENAI_API_KEY" not in os.environ
 assert json.loads(open(args[args.index("--output-schema")+1]).read())["additionalProperties"] is False
 if mode=="timeout":time.sleep(30)
