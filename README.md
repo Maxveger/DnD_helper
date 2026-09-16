@@ -120,7 +120,8 @@ uv run --frozen python scripts/source_archive.py
 
 ## Документация
 
-- [Ближайшие работы: доводка интерфейса, затем свободный мир](docs/NEXT_STEPS.md)
+- [ТЗ следующего этапа: свободный мир с LLM, $5 на сессию](docs/FREE_WORLD_SPEC.md)
+- [Текущий план и оставшиеся проверки интерфейса](docs/NEXT_STEPS.md)
 - [Согласованное направление: структура мира и импровизация LLM](docs/HYBRID_WORLD.md)
 - [GitHub: исходники, совместная работа и скачивание Windows-сборки](docs/GIT_WORKFLOW.md)
 
