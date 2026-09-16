@@ -201,6 +201,7 @@ class SimpleRules:
         if intent == "help":
             target = action.get("target")
             require(target in state["characters"] and target != actor, "Выберите другого персонажа.")
+            require(w["help_for"] != target, "Помощь этому персонажу уже подготовлена.")
             require(state["characters"][target]["hp"] > 0, "Выбывшему союзнику нужна перевязь.")
             require(
                 state["characters"][target]["location"] == c["location"],

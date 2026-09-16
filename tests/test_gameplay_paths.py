@@ -180,3 +180,42 @@ def test_recovery_does_not_cancel_a_waiting_roll(engine):
     with pytest.raises(GameError):
         e.command("clear_actions", {})
     assert e.store.read() == before
+
+
+def test_completed_suggestions_survive_restart_and_follow_undo(engine):
+    e = engine
+    start(e)
+    action(e, "read")
+    action(e, "clean")
+    e = Engine(Store(e.store.path))
+    options = e.presentation(e.store.read())["quick_actions"]
+    assert "read" not in options and "clean" not in options
+    e.command("undo", {})
+    options = e.presentation(e.store.read())["quick_actions"]
+    assert "clean" in options and "read" not in options
+    workshop(e)
+    action(e, "talk")
+    assert "talk" not in e.presentation(e.store.read())["quick_actions"]
+    action(e, "promise")
+    options = e.presentation(e.store.read())["quick_actions"]
+    assert "promise" not in options and "persuade" not in options
+
+
+def test_pump_suggestion_waits_for_filter_and_combat_actions_can_repeat(engine):
+    e = engine
+    start(e)
+    assert "start_pump" not in e.presentation(e.store.read())["quick_actions"]
+    workshop(e)
+    action(e, "force")
+    action(e, "attack", die=1)
+    options = e.presentation(e.store.read())["availability"]["mira"][""]
+    assert options["attack"] == "" and options["heal"] == ""
+
+
+def test_repeated_help_waits_until_bonus_is_used(engine):
+    e = engine
+    start(e, ["mira", "torvin"])
+    action(e, "help", target="torvin")
+    assert e.presentation(e.store.read())["availability"]["mira"]["torvin"]["help"]
+    action(e, "inspect", actor="torvin")
+    assert not e.presentation(e.store.read())["availability"]["mira"]["torvin"]["help"]

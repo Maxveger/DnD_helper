@@ -379,7 +379,7 @@ function render() {
     `Отменить все заявки (${g.queue.length + (p ? 1 : 0)})`;
   $("gm-guidance").textContent =
     p?.phase === "clarify"
-    ? "Это действие сейчас выполнить нельзя. Выберите доступную замену ниже или отмените заявку, чтобы сменить локацию. Если накопились лишние действия, нажмите «Отменить все заявки»."
+      ? "Это действие сейчас выполнить нельзя. Выберите доступную замену ниже или отмените заявку, чтобы сменить локацию. Если накопились лишние действия, нажмите «Отменить все заявки»."
       : presentation.guidance ||
         "Выберите действие игрока. Если нужного варианта нет, уточните намерение или откройте «Решение ведущего».";
   show(
@@ -388,25 +388,42 @@ function render() {
       state.settings.ai_enabled &&
       state.settings.has_openai_key,
   );
-  $("scene-change").disabled = !!p || g.world.combat || g.status !== "active";
-  $("scene-change").disabled ||= !presentation.exits.length;
-  const quick = presentation.quick_actions;
   const availability =
     presentation.availability?.[$("actor").value]?.[$("target").value] || {};
+  const choosing =
+    g.status === "active" &&
+    !presentation.can_finish &&
+    (!p || p.phase === "clarify");
+  const quick = choosing
+    ? presentation.quick_actions.filter((k) => availability[k] === "")
+    : [];
+  const exits = choosing && !p && !g.world.combat ? presentation.exits : [];
   $("quick-help").textContent =
-    p?.phase === "clarify"
-      ? "Кнопка заменит текущее ошибочное действие. Остальные заявки останутся в очереди."
-      : p
-        ? "Сначала завершите текущее действие кнопкой выше."
-        : "Выберите действие. Его последствие вступит в силу после вашего подтверждения.";
-  $("quick-actions").innerHTML = quick
-    .map((k) => {
-      const reason = availability[k] || "";
-      const disabled =
-        reason || g.status !== "active" || (p && p.phase !== "clarify");
-      return `<div class="quick-option"><button type="button" data-intent="${esc(k)}" aria-describedby="reason-${esc(k)}" ${disabled ? "disabled" : ""}>${esc(cat.intents[k])}</button><small id="reason-${esc(k)}">${esc(reason)}</small></div>`;
-    })
-    .join("");
+    g.status === "lobby"
+      ? "Начните приключение кнопкой выше."
+      : g.status === "paused"
+        ? "Возобновите игру, чтобы выбрать действие."
+        : g.status === "finished"
+          ? "Приключение завершено. История сохранена в журнале."
+          : presentation.can_finish && !p
+            ? "Цель достигнута. Завершите приключение кнопкой выше."
+            : p?.phase === "clarify"
+              ? "Кнопка заменит текущее ошибочное действие. Остальные заявки останутся в очереди."
+              : p
+                ? "Сначала завершите текущее действие кнопкой выше."
+                : quick.length || exits.length
+                  ? "Выберите действие или место, куда направится группа."
+                  : "Для выбранного героя и цели нет готовых действий. Выберите другого героя или предложите своё действие.";
+  $("quick-actions").innerHTML = [
+    ...quick.map(
+      (k) =>
+        `<button type="button" data-intent="${esc(k)}">${esc(cat.intents[k])}</button>`,
+    ),
+    ...exits.map(
+      (id) =>
+        `<button type="button" data-scene="${esc(id)}">Перейти: ${esc(cat.scenes[id].name)} ↗</button>`,
+    ),
+  ].join("");
   $("input-source").textContent = g.demo
     ? "Локальный ввод / демо"
     : "Telegram и ввод ведущего";
@@ -472,11 +489,8 @@ document.addEventListener("click", (e) => {
   const play = e.target.closest("[data-play-adventure]");
   if (play) openNew(play.dataset.playAdventure);
   const destination = e.target.closest("[data-scene]");
-  if (destination)
-    run(async () => {
-      await command("scene", { scene: destination.dataset.scene });
-      $("scene-dialog").close();
-    });
+  if (destination && !destination.disabled)
+    run(() => command("scene", { scene: destination.dataset.scene }));
   const close = e.target.closest("[data-close]");
   if (close) $(close.dataset.close).close();
   const nav = e.target.closest("[data-tab]");
@@ -534,18 +548,6 @@ $("clear-actions").onclick = () => run(() => command("clear_actions"));
 $("actor").onchange = render;
 $("target").onchange = render;
 $("undo").onclick = () => run(() => command("undo"));
-$("scene-change").onclick = () => {
-  const exits = state.presentation.exits;
-  if (exits.length === 1)
-    return run(() => command("scene", { scene: exits[0] }));
-  $("scene-options").innerHTML = exits
-    .map(
-      (id) =>
-        `<button class="button quiet full" data-scene="${esc(id)}">${esc(state.catalog.scenes[id].name)}</button>`,
-    )
-    .join("");
-  $("scene-dialog").showModal();
-};
 $("hint").onclick = () =>
   toast(
     state.presentation.guidance || state.catalog.scenes[state.game.scene].hint,

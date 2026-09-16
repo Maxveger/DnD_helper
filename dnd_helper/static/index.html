@@ -108,10 +108,7 @@
           <div id="game-layout" class="game-grid" hidden>
             <div class="story-column">
               <div class="scene-line">
-                <span id="scene-number" class="eyebrow"></span
-                ><button id="scene-change" class="text-button">
-                  Сменить локацию ↗
-                </button>
+                <span id="scene-number" class="eyebrow"></span>
               </div>
               <p id="gm-guidance" class="gm-guidance"></p>
               <article class="narration-card">
@@ -138,7 +135,11 @@
                   ><button id="discard" class="text-button muted" hidden>
                     Пропустить
                   </button>
-                  <button id="clear-actions" class="text-button" hidden></button>
+                  <button
+                    id="clear-actions"
+                    class="text-button"
+                    hidden
+                  ></button>
                 </div>
               </article>
               <details class="gm-note">
@@ -410,15 +411,6 @@
           Создать приключение →
         </button>
       </form>
-    </dialog>
-    <dialog id="scene-dialog">
-      <div class="dialog-heading">
-        <h2>Куда идёт группа?</h2>
-        <button class="close" data-close="scene-dialog" aria-label="Закрыть">
-          ×
-        </button>
-      </div>
-      <div id="scene-options"></div>
     </dialog>
     <dialog id="settings-dialog">
       <form id="settings-form">

@@ -448,14 +448,25 @@ class Engine:
         if state.get("definition"):
             return self.rules_for(state).presentation(state)
         w = state["world"]
+        completed = {
+            "inspect": "inspect" in w["attempts"],
+            "read": "manual" in state["clues"],
+            "clean": w["filter_clean"],
+            "talk": "ada" in state["clues"],
+            "promise": w["box_open"] and w["guard_disabled"],
+            "persuade": w["box_open"] or "persuade" in w["attempts"],
+        }
+        candidates = (
+            ["attack", "promise", "heal", "help", "retreat"]
+            if w["combat"]
+            else ["inspect", "read", "clean", "install", "start_pump", "heal", "help"]
+            if state["scene"] == "reception"
+            else ["talk", "promise", "persuade", "pick", "force", "take", "heal", "help"]
+        )
         return {
-            "quick_actions": (
-                ["attack", "promise", "heal", "help", "retreat"]
-                if w["combat"]
-                else ["inspect", "read", "clean", "install", "start_pump", "heal", "help"]
-                if state["scene"] == "reception"
-                else ["talk", "promise", "persuade", "pick", "force", "take", "heal", "help"]
-            ),
+            "quick_actions": [
+                k for k in candidates if not completed.get(k) and (k != "start_pump" or w["filter_clean"])
+            ],
             "exits": [k for k in catalog_for(state)["scenes"] if k != state["scene"]],
             "objectives": [
                 {"text": text, "done": bool(done)}
@@ -487,7 +498,7 @@ class Engine:
                 "Поговорите с Адой. Обещание безопасно починить насос позволит получить сердечник без броска."
             )
         if w["core"] == "box":
-            return "За сердечником нужно перейти в мастерскую: нажмите «Сменить локацию» вверху. Фильтр можно очистить сейчас или после возвращения."
+            return "За сердечником нужно в мастерскую — переход есть среди действий ниже. Фильтр можно очистить сейчас или после возвращения."
         if not w["filter_clean"]:
             return "Очистите фильтр перед запуском насоса."
         if w["core"] != "pump":

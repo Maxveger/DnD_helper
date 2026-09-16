@@ -630,17 +630,6 @@ main {
   flex-wrap: wrap;
   margin-top: 18px;
 }
-.quick-option {
-  flex: 1 1 145px;
-  min-width: 0;
-}
-.quick-option small {
-  display: block;
-  margin-top: 5px;
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
 .gm-guidance {
   padding: 12px 16px;
   background: var(--paper);
@@ -648,8 +637,11 @@ main {
   line-height: 1.5;
 }
 .quick-actions button {
-  font-size: 10px;
-  padding: 5px 9px;
+  font-size: 12px;
+  padding: 9px 12px;
+  min-height: 40px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   background: #eaece2;
   border: 1px solid #dfe3d6;
   border-radius: 5px;
