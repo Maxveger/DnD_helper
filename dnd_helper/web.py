@@ -127,6 +127,8 @@ def create_app(directory=None, background=True, shutdown=None):
             "start",
             "pause",
             "submit",
+            "choose",
+            "clear_actions",
             "edit",
             "discard",
             "request_roll",

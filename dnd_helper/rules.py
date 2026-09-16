@@ -244,7 +244,9 @@ class SimpleRules:
                 [f"Сердечник получит {c['name']}"],
             )
         if intent == "install":
-            require(w["core"] == actor, "Сердечник должен быть у действующего персонажа.")
+            require(w["core"] != "box", "Сначала заберите сердечник в мастерской.")
+            require(w["core"] != "pump", "Сердечник уже установлен.")
+            require(w["core"] == actor, "Выберите персонажа, который несёт сердечник.")
             return ready(
                 "Ты вставляешь сердечник в круглое гнездо. Крепления встают на место.",
                 [("core", "pump")],
@@ -312,7 +314,12 @@ class SimpleRules:
                 state["characters"][args[0]]["items"].remove(args[1])
             elif op == "begin_combat":
                 if not w["guard_disabled"]:
-                    w.update(combat=True, round=1, acted=[], turn=next(iter(state["characters"])))
+                    turn = next(
+                        k
+                        for k, c in state["characters"].items()
+                        if c["hp"] > 0 and c["location"] == "workshop"
+                    )
+                    w.update(combat=True, round=1, acted=[], turn=turn)
             elif op == "end_combat":
                 self.end_combat(state)
             elif op == "retreat":
@@ -333,8 +340,8 @@ class SimpleRules:
             ]
             remaining = [k for k in active if k not in w["acted"]]
             if not active:
-                self.end_combat(state)
                 state["scene"] = "reception"
+                self.end_combat(state)
             elif remaining:
                 w["turn"] = remaining[0]
             else:
@@ -365,3 +372,5 @@ class SimpleRules:
         if was_combat:
             for c in state["characters"].values():
                 c["hp"] = max(1, c["hp"])
+                # Outside combat the MVP has one shared scene, including after retreat.
+                c["location"] = state["scene"]

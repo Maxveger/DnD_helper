@@ -364,8 +364,8 @@ function render() {
     primary.textContent = "Ожидаем бросок игрока";
     primary.disabled = true;
   } else if (p) {
-    primary.textContent = "Выберите действие ниже";
-    primary.disabled = true;
+    primary.textContent = "Отменить это действие →";
+    primary.dataset.command = "discard";
   } else if (presentation.can_finish) {
     primary.textContent = "Завершить приключение →";
     primary.dataset.command = "finish";
@@ -373,7 +373,15 @@ function render() {
     primary.textContent = "Ждём действие игроков";
     primary.disabled = true;
   }
-  show("discard", !!p);
+  show("discard", !!p && p.phase !== "clarify");
+  show("clear-actions", g.queue.length > 0 && (!p || p.phase === "clarify"));
+  $("clear-actions").textContent =
+    `Отменить все заявки (${g.queue.length + (p ? 1 : 0)})`;
+  $("gm-guidance").textContent =
+    p?.phase === "clarify"
+    ? "Это действие сейчас выполнить нельзя. Выберите доступную замену ниже или отмените заявку, чтобы сменить локацию. Если накопились лишние действия, нажмите «Отменить все заявки»."
+      : presentation.guidance ||
+        "Выберите действие игрока. Если нужного варианта нет, уточните намерение или откройте «Решение ведущего».";
   show(
     "rewrite",
     p?.phase === "ready" &&
@@ -383,11 +391,21 @@ function render() {
   $("scene-change").disabled = !!p || g.world.combat || g.status !== "active";
   $("scene-change").disabled ||= !presentation.exits.length;
   const quick = presentation.quick_actions;
+  const availability =
+    presentation.availability?.[$("actor").value]?.[$("target").value] || {};
+  $("quick-help").textContent =
+    p?.phase === "clarify"
+      ? "Кнопка заменит текущее ошибочное действие. Остальные заявки останутся в очереди."
+      : p
+        ? "Сначала завершите текущее действие кнопкой выше."
+        : "Выберите действие. Его последствие вступит в силу после вашего подтверждения.";
   $("quick-actions").innerHTML = quick
-    .map(
-      (k) =>
-        `<button type="button" data-intent="${k}" ${!["active", "paused"].includes(g.status) ? "disabled" : ""}>${esc(cat.intents[k])}</button>`,
-    )
+    .map((k) => {
+      const reason = availability[k] || "";
+      const disabled =
+        reason || g.status !== "active" || (p && p.phase !== "clarify");
+      return `<div class="quick-option"><button type="button" data-intent="${esc(k)}" aria-describedby="reason-${esc(k)}" ${disabled ? "disabled" : ""}>${esc(cat.intents[k])}</button><small id="reason-${esc(k)}">${esc(reason)}</small></div>`;
+    })
     .join("");
   $("input-source").textContent = g.demo
     ? "Локальный ввод / демо"
@@ -464,9 +482,9 @@ document.addEventListener("click", (e) => {
   const nav = e.target.closest("[data-tab]");
   if (nav) switchTab(nav.dataset.tab);
   const quick = e.target.closest("[data-intent]");
-  if (quick)
+  if (quick && !quick.disabled)
     run(() =>
-      command("submit", {
+      command("choose", {
         actor: $("actor").value,
         text: state.catalog.intents[quick.dataset.intent],
         intent: quick.dataset.intent,
@@ -512,6 +530,9 @@ $("primary-action").onclick = () => {
 };
 $("pause").onclick = () => run(() => command("pause"));
 $("discard").onclick = () => run(() => command("discard"));
+$("clear-actions").onclick = () => run(() => command("clear_actions"));
+$("actor").onchange = render;
+$("target").onchange = render;
 $("undo").onclick = () => run(() => command("undo"));
 $("scene-change").onclick = () => {
   const exits = state.presentation.exits;
@@ -525,7 +546,10 @@ $("scene-change").onclick = () => {
     .join("");
   $("scene-dialog").showModal();
 };
-$("hint").onclick = () => toast(state.catalog.scenes[state.game.scene].hint);
+$("hint").onclick = () =>
+  toast(
+    state.presentation.guidance || state.catalog.scenes[state.game.scene].hint,
+  );
 $("action-form").onsubmit = (e) => {
   e.preventDefault();
   run(async () => {

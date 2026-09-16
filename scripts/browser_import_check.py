@@ -109,11 +109,11 @@ def exercise(url, output):
     return token
 
 
-def main():
+def main(exercise_flow=exercise, output_dir="build/browser-import"):
     parser = argparse.ArgumentParser()
     parser.add_argument("--url")
     parser.add_argument("--executable", type=Path)
-    parser.add_argument("--output", type=Path, default=Path("build/browser-import"))
+    parser.add_argument("--output", type=Path, default=Path(output_dir))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     process = None
@@ -143,7 +143,7 @@ def main():
                     except (OSError, ValueError):
                         time.sleep(0.1)
                 assert url, "App did not start"
-            token = exercise(url, args.output)
+            token = exercise_flow(url, args.output)
             if process:
                 req = urllib.request.Request(
                     url + "/api/shutdown",
@@ -160,9 +160,7 @@ def main():
                     process.terminate()
                     process.wait(timeout=5)
                 process.stderr.close()
-    print(
-        "Browser import passed: author kit, repair report, file import, custom heroes/d6, failure, healing, exits, finale, reload, mobile."
-    )
+    print(f"Browser acceptance passed: {exercise_flow.__module__}.{exercise_flow.__name__}")
 
 
 if __name__ == "__main__":

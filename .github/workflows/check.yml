@@ -41,6 +41,9 @@ jobs:
       - name: Check imported story in frozen Windows browser UI
         if: runner.os == 'Windows'
         run: python scripts/ci_command.py uv run --frozen python scripts/browser_import_check.py --executable dist/DnD-Helper/DnD-Helper.exe
+      - name: Check demo recovery and combat in frozen Windows browser UI
+        if: runner.os == 'Windows'
+        run: python scripts/ci_command.py uv run --frozen python scripts/browser_gameplay_check.py --executable dist/DnD-Helper/DnD-Helper.exe
       - name: Package source code
         if: runner.os == 'Windows'
         run: python scripts/ci_command.py uv run --frozen python scripts/source_archive.py
@@ -61,5 +64,6 @@ jobs:
           path: |
             build/test-results.xml
             build/browser-import/*.png
+            build/browser-gameplay/*.png
           if-no-files-found: ignore
           retention-days: 7

@@ -7,7 +7,7 @@ from copy import deepcopy
 from .content import ADVENTURE, CHARACTERS, characters
 from .adventures import catalog_for, character_catalog
 from .declarative import DeclarativeRules
-from .rules import SimpleRules, require
+from .rules import GameError, SimpleRules, require
 from .storage import encode
 
 
@@ -99,8 +99,14 @@ class Engine:
             elif kind == "pause":
                 require(state["status"] in {"active", "paused"}, "Сначала начните игру.")
                 state["status"] = "paused" if state["status"] == "active" else "active"
-            elif kind == "submit":
+            elif kind in {"submit", "choose"}:
                 require(state["status"] in {"active", "paused"}, "Действия доступны после начала игры.")
+                if kind == "choose":
+                    require(state["status"] == "active", "Возобновите игру.")
+                    require(
+                        state["pending"] is None or state["pending"]["phase"] == "clarify",
+                        "Сначала завершите текущее действие.",
+                    )
                 require(data.get("actor") in state["characters"], "Выберите персонажа.")
                 if data.get("sender"):
                     participant = state["participants"].get(str(data["sender"]))
@@ -111,20 +117,44 @@ class Engine:
                     )
                 text = str(data.get("text", "")).strip()
                 require(0 < len(text) <= 2000, "Действие должно содержать от 1 до 2000 символов.")
-                require(len(state["queue"]) < 30, "Очередь заполнена. Сначала разберите текущие действия.")
+                require(
+                    kind == "choose" or len(state["queue"]) < 30,
+                    "Очередь заполнена. Сначала разберите текущие действия.",
+                )
                 intent = data.get("intent", "unknown")
                 require(intent in cat["intents"], "Неизвестное действие.")
-                state["queue"].append(
-                    {
-                        "id": uid(),
-                        "actor": data["actor"],
-                        "text": text,
-                        "intent": intent,
-                        "target": data.get("target"),
-                        "source": data.get("source", "web"),
-                        "sender": data.get("sender"),
-                    }
+                action = {
+                    "id": uid(),
+                    "actor": data["actor"],
+                    "text": text,
+                    "intent": intent,
+                    "target": data.get("target"),
+                    "source": data.get("source", "web"),
+                    "sender": data.get("sender"),
+                }
+                if kind == "choose":
+                    plan = self.prepare(state, action)
+                    require(plan["phase"] != "clarify", plan["text"])
+                    if state["pending"]:
+                        log(state, "Действие заменено", state["pending"]["action"]["text"], "system")
+                    state["pending"] = plan
+                else:
+                    state["queue"].append(action)
+            elif kind == "clear_actions":
+                require(
+                    state["pending"] is None or state["pending"]["phase"] == "clarify",
+                    "Сначала завершите текущее действие.",
                 )
+                count = len(state["queue"]) + bool(state["pending"])
+                require(count > 0, "Нет действий для отмены.")
+                log(
+                    state,
+                    "Действия отменены ведущим",
+                    f"Отменено заявок: {count}. Игровой мир не изменён.",
+                    "system",
+                )
+                state["pending"] = None
+                state["queue"] = []
             elif kind == "discard":
                 require(state["pending"] is not None, "Нет текущего действия.")
                 log(state, "Действие пропущено", state["pending"]["action"]["text"], "system")
@@ -346,8 +376,6 @@ class Engine:
         return p
 
     def prepare(self, state, action):
-        from .rules import GameError
-
         try:
             result = self.rules_for(state).prepare(state, action)
         except GameError as exc:
@@ -399,6 +427,24 @@ class Engine:
         self.rules_for(state).validate(state)
 
     def presentation(self, state):
+        result = self.scene_presentation(state)
+        rules = self.rules_for(state)
+        # Use the same rule validation as execution; the UI never infers prerequisites.
+        result["availability"] = {}
+        for actor in state["characters"]:
+            targets = result["availability"][actor] = {}
+            for target in ["", *state["characters"]]:
+                options = targets[target] = {}
+                for intent in result["quick_actions"]:
+                    action = {"actor": actor, "target": target or None, "intent": intent, "text": intent}
+                    try:
+                        plan = rules.prepare(state, action)
+                        options[intent] = plan["text"] if plan["phase"] == "clarify" else ""
+                    except GameError as exc:
+                        options[intent] = str(exc)
+        return result
+
+    def scene_presentation(self, state):
         if state.get("definition"):
             return self.rules_for(state).presentation(state)
         w = state["world"]
@@ -406,9 +452,9 @@ class Engine:
             "quick_actions": (
                 ["attack", "promise", "heal", "help", "retreat"]
                 if w["combat"]
-                else ["inspect", "read", "clean", "install", "start_pump"]
+                else ["inspect", "read", "clean", "install", "start_pump", "heal", "help"]
                 if state["scene"] == "reception"
-                else ["talk", "promise", "persuade", "pick", "force", "take"]
+                else ["talk", "promise", "persuade", "pick", "force", "take", "heal", "help"]
             ),
             "exits": [k for k in catalog_for(state)["scenes"] if k != state["scene"]],
             "objectives": [
@@ -422,7 +468,32 @@ class Engine:
             ],
             "can_finish": w["pump_on"],
             "ending_title": "Вода снова течёт",
+            "guidance": self.waterworks_guidance(state),
         }
+
+    @staticmethod
+    def waterworks_guidance(state):
+        w = state["world"]
+        if w["pump_on"]:
+            return "Вода пошла. Нажмите «Завершить приключение»."
+        if w["combat"]:
+            return "Ход отмеченного персонажа. Можно атаковать, отступить или обещать Аде починить насос — это завершит бой."
+        if state["scene"] == "workshop":
+            if w["core"] != "box":
+                return "Сердечник найден. Перейдите в приёмную для ремонта насоса."
+            if w["box_open"]:
+                return "Ящик открыт. Выберите персонажа и нажмите «Забрать сердечник»."
+            return (
+                "Поговорите с Адой. Обещание безопасно починить насос позволит получить сердечник без броска."
+            )
+        if w["core"] == "box":
+            return "За сердечником нужно перейти в мастерскую: нажмите «Сменить локацию» вверху. Фильтр можно очистить сейчас или после возвращения."
+        if not w["filter_clean"]:
+            return "Очистите фильтр перед запуском насоса."
+        if w["core"] != "pump":
+            name = state["characters"][w["core"]]["name"]
+            return f"Сердечник несёт {name}. Выберите этого персонажа и установите сердечник."
+        return "Фильтр чист, сердечник установлен. Можно запустить насос."
 
     def player_view(self, state, user_id):
         participant = state["participants"].get(str(user_id))

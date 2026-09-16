@@ -318,5 +318,8 @@ def test_six_custom_heroes_and_ally_target_validation(tmp_path, doc):
     s.engine.command("discard", {})
     s.engine.command("manual", {"text": "Ян ранен.", "hp": {"jan": 0}})
     s.engine.command("accept", {})
+    options = s.view()["presentation"]["availability"]["lea"]
+    assert options["lea"]["heal"]
+    assert not options["jan"]["heal"]
     act(s, "heal", target="jan")
     assert s.store.read()["characters"]["jan"]["hp"] == 3
