@@ -9,6 +9,7 @@ from .engine import Engine, uid
 from .providers import OpenAIProvider, PRICES, demo_intent
 from .rules import GameError
 from .storage import Store
+from .free_world import FreeWorld
 from .telegram import TelegramBot
 
 
@@ -19,6 +20,7 @@ class Service:
         self.adventures = AdventureLibrary(self.store)
         self.engine = Engine(self.store, adventures=self.adventures)
         self.provider = OpenAIProvider(self.config, self.store)
+        self.free_world = FreeWorld(directory)
         self.bot = TelegramBot(self)
         self.stop_event = threading.Event()
         self.worker = None
@@ -32,6 +34,7 @@ class Service:
 
     def stop(self):
         self.stop_event.set()
+        self.free_world.close()
         self.bot.stop()
         if self.worker:
             self.worker.join(timeout=27)

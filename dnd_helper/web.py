@@ -104,6 +104,31 @@ def create_app(directory=None, background=True, shutdown=None):
     def health():
         return {"app": "dnd-helper", "version": "0.1.0", "ok": True}
 
+    @app.get("/world")
+    def world_page():
+        return HTMLResponse((STATIC / "world.html").read_text("utf-8").replace("__CSRF__", token))
+
+    @app.get("/api/world")
+    def world_state():
+        return service.free_world.view()
+
+    @app.post("/api/world/command")
+    def world_command(body: Command):
+        if service.free_world.store.read() and body.revision is None:
+            raise GameError("Обновите страницу перед командой.")
+        return service.free_world.command(body.kind, body.data, body.command_id, body.revision)
+
+    @app.get("/api/codex/status")
+    def codex_status():
+        return service.free_world.provider.status()
+
+    @app.post("/api/codex/login")
+    def codex_login():
+        try:
+            return service.free_world.provider.login()
+        except (OSError, ValueError) as exc:
+            raise GameError("Не удалось открыть вход Codex. Выполните codex login в терминале.") from exc
+
     @app.get("/api/author-kit")
     def kit():
         return author_kit()

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="dnd-token" content="__CSRF__">
+  <title>Свободный мир · Тихая таверна</title>
+  <link rel="stylesheet" href="/static/world.css">
+  <script defer src="/static/world.js"></script>
+</head>
+<body>
+<header><a href="/">← Тихая таверна</a><span>Текстовый прототип · Codex</span></header>
+<main>
+  <h1>Свободный мир</h1>
+  <p class="muted">Описывайте любые действия Миры. Модель предложит последствия, вы решите, принять ли их.</p>
+  <section class="connection">
+    <div><strong>Подключение по подписке ChatGPT</strong><p id="connection-status" role="status">Проверяем вход…</p></div>
+    <div class="buttons"><button id="check-login">Проверить вход</button><button id="login">Войти через ChatGPT</button></div>
+    <details><summary>Как подключить на другом компьютере</summary>
+      <p>Установите официальный Codex CLI и перезапустите приложение. Нажмите «Войти через ChatGPT» и завершите вход в своём аккаунте с доступом к Codex. Пароль и ключ в это приложение вводить не нужно.</p>
+      <p>Если окно входа не открылось, выполните <code>codex login</code> в терминале, затем «Проверить вход».</p>
+      <a href="https://developers.openai.com/codex/cli" target="_blank" rel="noopener noreferrer">Установка Codex</a>
+      <p>Используется модель из настроек вашего Codex. Лимит подписки проверяется в Codex; автоматического перехода на платный API нет.</p>
+    </details>
+  </section>
+  <p id="error" role="alert" hidden></p>
+  <div class="toolbar"><button id="new" class="primary">Начать короткую игру</button><button id="undo" hidden>Отменить принятый ход</button><span id="usage" class="muted"></span></div>
+  <div id="table" class="layout" hidden>
+    <section class="play">
+      <div id="history" aria-live="polite"></div>
+      <section id="pending" hidden></section>
+      <form id="action-form">
+        <label for="action">Что делает Мира?</label>
+        <textarea id="action" rows="3" maxlength="2000" placeholder="Например: обещаю Аде помочь, но сначала иду к лесу поискать родник" required></textarea>
+        <div class="buttons"><button id="send" class="primary" type="submit">Предложить действие</button><span id="next" class="muted"></span></div>
+      </form>
+    </section>
+    <aside><section class="card"><h2>Мира и окружение</h2><div id="world"></div></section>
+      <section class="card"><h2>Память игры</h2><div id="facts"></div></section>
+      <details class="card"><summary>Диагностика запросов</summary><div id="calls"></div></details>
+    </aside>
+  </div>
+</main>
+</body>
+</html>
