@@ -1,6 +1,6 @@
 # Project context
 
-Read `docs/PROJECT_BRIEF.md` before changing product behavior. It records the user's decisions and takes priority over older design documents when they disagree.
+Start with `docs/README.md` for the documentation map and `docs/NEXT_STEPS.md` for the pause/resume state. Read `docs/PROJECT_BRIEF.md` before changing product behavior. It records the user's decisions and takes priority over older design documents when they disagree.
 
 - This is an assistant for a **human beginner GM running a tabletop group**, not a solo AI game. Players choose actions; the GM selects what to say and confirms consequences.
 - The current slice is text-only, local web + the operator's own Codex subscription, using economical Luna. No implicit paid API fallback, Telegram delivery or voice work.
@@ -11,4 +11,4 @@ Read `docs/PROJECT_BRIEF.md` before changing product behavior. It records the us
 - Distinguish source checks, live model measurements and published Windows releases. Do not describe a short probe or simulated history as a tested full game.
 
 - The GM is a complete beginner. Keep the spoken passage prominent; settings/import/diagnostics and mechanical review are secondary. Advice must not look like an applied action or remain a sticky hidden mode. One visible hero panel uses name tabs; do not stack every character card.
-- The user permits fresh starts for the current UI iteration. Use isolated test games, then explicitly start the improved example for the user; do not silently play through it.
+- The fresh start authorized for the completed UI iteration has already been performed. Development is paused at the user’s request; documentation maintenance must not reset or play the game. Do not treat the previous reset as blanket permission for future saves.
