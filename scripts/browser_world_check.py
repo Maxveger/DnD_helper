@@ -1,6 +1,7 @@
 """Isolated browser check with deterministic model responses; never consumes a subscription."""
 
 import socket
+import re
 import json
 import tempfile
 import threading
@@ -35,7 +36,7 @@ class Stub:
                     speaker=None,
                     check={"stat": "agility", "difficulty": "standard"} if risky else None,
                     success={
-                        "read_aloud": "Черновик реплики для ведущего.",
+                        "read_aloud": "Ада придерживает ведро, пока Мира перехватывает ручку поудобнее. «Спасибо. Хоть знать буду, что я тут не одна с этой бедой», — говорит она и отступает от колодца, освобождая дорогу.",
                         "summary": "Переход завершён" if risky else "Ведро у Миры; обещание записано.",
                         "operations": []
                         if risky or hint
@@ -86,19 +87,40 @@ def main():
                 errors = []
                 page.on("pageerror", lambda e: errors.append(str(e)))
                 page.goto(f"http://127.0.0.1:{port}/world")
+                page.locator("#open-settings").click()
                 expect(page.locator("#connection-status")).to_contain_text("ChatGPT")
                 with page.expect_response(lambda response: response.url.endswith("/api/world/model")):
                     page.locator("#world-model").select_option("gpt-5.6-terra")
                 page.reload()
+                page.locator("#open-settings").click()
                 expect(page.locator("#world-model")).to_have_value("gpt-5.6-terra")
-                page.locator("#new").click()
+                page.get_by_label("Закрыть настройки", exact=True).click()
+                page.locator("#start-example").click()
+                expect(page.locator("#connection-status")).not_to_be_visible()
+                expect(page.locator("#documents")).not_to_be_visible()
+                expect(page.locator("#reading")).to_contain_text("Я Ада")
+                assert (
+                    page.locator("#reading .read-aloud").evaluate(
+                        "el => parseFloat(getComputedStyle(el).fontSize)"
+                    )
+                    >= 22
+                )
+                page.locator("#open-lore").click()
+                expect(page.locator("#lore-content")).to_contain_text("Берёзовый Брод")
+                expect(page.locator("#lore-content")).to_contain_text("ветка заклинила")
+                page.get_by_label("Закрыть описание мира").click()
+                Path("/tmp/dnd-world-browser").mkdir(exist_ok=True)
+                page.screenshot(path="/tmp/dnd-world-browser/initial.png", full_page=True)
                 page.locator("#action").fill("Беру ведро и обещаю вернуться.")
                 page.locator("#send").click()
-                expect(page.get_by_role("button", name="Принять исход")).to_be_visible()
+                expect(page.get_by_role("button", name="Применить и продолжить")).to_be_visible()
                 expect(page.locator("#facts")).not_to_contain_text("Мира обещала вернуться.")
                 expect(page.locator("#world-model")).to_be_disabled()
+                expect(page.locator("#review-effects")).not_to_have_attribute("open", "")
+                expect(page.locator("#reading")).to_contain_text("Ада придерживает ведро")
+                page.screenshot(path="/tmp/dnd-world-browser/card.png", full_page=True)
                 page.reload()
-                page.get_by_role("button", name="Принять исход").click()
+                page.get_by_role("button", name="Применить и продолжить").click()
                 expect(page.locator("#facts")).to_contain_text("Мира обещала вернуться.")
                 expect(page.locator("#world")).to_contain_text("Перевязь, Ведро")
                 page.locator("#action").fill("Спускаюсь в колодец.")
@@ -106,46 +128,60 @@ def main():
                 expect(page.get_by_role("button", name="Ввести бросок")).to_be_visible()
                 page.get_by_label("Результат физического кубика").fill("2")
                 page.get_by_role("button", name="Ввести бросок").click()
-                page.get_by_role("button", name="Принять исход").click()
-                expect(page.locator("#world")).to_contain_text("6/8 HP")
+                page.get_by_role("button", name="Применить и продолжить").click()
+                expect(page.locator("#world")).to_contain_text("6/8 здоровья")
                 page.locator("#undo").click()
-                expect(page.locator("#world")).to_contain_text("8/8 HP")
+                expect(page.locator("#world")).to_contain_text("8/8 здоровья")
                 expect(page.locator("#facts")).to_contain_text("Мира обещала вернуться.")
                 # A known move is prepared without consulting the stub/model.
                 count = len(app.state.service.free_world.store.read()["calls"])
-                page.get_by_role("button", name="Перейти: Лесная тропа").click()
-                page.get_by_role("button", name="Принять исход").click()
+                page.get_by_role("button", name="Мира: перейти — Лесная тропа").click()
+                page.get_by_role("button", name="Применить и продолжить").click()
                 expect(page.locator("#world")).to_contain_text("Лесная тропа")
                 assert len(app.state.service.free_world.store.read()["calls"]) == count
                 page.locator("#undo").click()
-                # File import, repair guidance, two heroes and a GM question.
+                # File import, repair guidance, four switchable heroes and a GM question.
+                page.locator("#open-settings").click()
                 page.locator("#documents > summary").click()
                 page.locator("#document-text").fill("{}")
                 page.locator("#validate-document").click()
                 expect(page.locator("#document-report")).to_contain_text("Ошибки")
                 page.locator("#example-document").click()
-                page.wait_for_function(
-                    "document.getElementById('document-text').value.includes('dnd-world@1')"
+                expect(page.locator("#document-text")).to_have_value(re.compile("dnd-world@1"))
+                # Four heroes must remain one visible hero card, not four stacked panels.
+                raw = json.loads(page.locator("#document-text").input_value())
+                base = next(e for e in raw["entities"] if e["id"] == "mira")
+                raw["entities"].extend(
+                    [{**base, "id": "lea", "name": "Лея"}, {**base, "id": "jan", "name": "Ян"}]
                 )
+                page.locator("#document-text").fill(json.dumps(raw, ensure_ascii=False))
                 page.locator("#validate-document").click()
                 expect(page.locator("#import-document")).to_be_visible()
                 page.on("dialog", lambda dialog: dialog.accept())
                 page.locator("#import-document").click()
+                expect(page.get_by_role("tab")).to_have_count(4)
+                expect(page.locator("#world .hero-name")).to_have_count(1)
+                page.get_by_role("tab", name="Торвин", exact=True).click()
+                expect(page.locator("#actor")).to_have_value("torvin")
                 expect(page.locator("#world")).to_contain_text("Торвин")
-                page.locator("#actor").select_option("torvin")
-                page.locator("#request-mode").select_option("hint")
+                page.locator("#ask-hint").click()
+                expect(page.locator("#mode-note")).to_contain_text("останутся на месте")
                 page.locator("#action").fill("Игроки растерялись. Что предложить ведущему?")
                 page.locator("#send").click()
-                expect(page.get_by_role("button", name="Принять исход")).to_be_visible()
-                page.locator("#pending details").last.locator("summary").click()
-                page.get_by_label("Исправить реплику").fill("Ада ждёт вашего решения.")
-                page.get_by_label("Исправить итог").fill("Ведущий предложил два подхода.")
+                expect(page.get_by_role("button", name="Понятно · закрыть совет")).to_be_visible()
+                page.get_by_role("button", name="Исправить текст", exact=True).click()
+                page.locator("#edit-text").fill("Ада ждёт вашего решения.")
+                page.locator("#edit-summary").fill("Ведущий предложил два подхода.")
                 page.get_by_role("button", name="Сохранить правки").click()
                 expect(page.locator("#pending")).to_contain_text("Правки ведущего сохранены")
                 page.reload()
                 expect(page.locator("#pending")).to_contain_text("Ада ждёт вашего решения.")
-                page.get_by_role("button", name="Принять исход").click()
+                page.get_by_role("button", name="Понятно · закрыть совет").click()
                 expect(page.locator("#history")).to_contain_text("Вопрос ведущего")
+                expect(page.locator("#action-title")).to_have_text("Что делает игрок?")
+                expect(page.locator("#send")).to_have_text("Разобрать действие")
+                assert app.state.service.free_world.store.read()["entities"]["torvin"]["location"] == "square"
+                page.locator("#open-settings").click()
                 page.locator("#documents > summary").click()
                 with page.expect_download() as download_info:
                     page.locator("#export-log").click()
@@ -155,9 +191,7 @@ def main():
                 assert journal["format"] == "dnd-world-log@1"
                 assert journal["events"][0]["edited"]
                 page.locator("#document-file").set_input_files(journal_path)
-                page.wait_for_function(
-                    "document.getElementById('document-text').value.includes('dnd-world-log@1')"
-                )
+                expect(page.locator("#document-text")).to_have_value(re.compile("dnd-world-log@1"))
                 page.locator("#validate-document").click()
                 expect(page.locator("#document-report")).to_contain_text("Записей журнала: 1")
                 page.locator("#import-document").click()
@@ -170,7 +204,7 @@ def main():
                 assert not errors, errors
                 browser.close()
                 print(
-                    "Browser: GM advice, edit, reload, dice, undo, local travel, custom scenario, journal roundtrip, mobile OK"
+                    "Browser: readable speech, hidden setup, lore, four hero tabs, advice mode reset, dice, editing, journals, mobile OK"
                 )
         finally:
             app.state.service.free_world.close()

@@ -16,7 +16,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--codex", required=True)
     parser.add_argument("--output", default="/tmp/dnd-gm-probe.json")
-    parser.add_argument("--suite", choices=("core", "edges"), default="core")
+    parser.add_argument("--suite", choices=("core", "edges", "prose"), default="core")
     args = parser.parse_args()
     cases = [
         (
@@ -56,6 +56,13 @@ def main():
                 "Торвин спрашивает Аду: ты знаешь точную причину, почему колодец пересох? Предложи ведущему ответ NPC согласно её знаниям.",
             ),
         ]
+    if args.suite == "prose":
+        cases = [
+            ("action", "Мира внимательно осматривает мастерскую: что здесь видно без обыска и без риска?"),
+            ("action", "Мира говорит Аде: мы никогда не чинили колодцы, но хотим помочь. С чего нам начать?"),
+            ("hint", "Торвин приходит в мастерскую и внимательно осматривается."),
+        ]
+    actor = "mira" if args.suite == "prose" else "torvin"
     responses, rows = [], []
 
     class Recording(CodexProvider):
@@ -80,15 +87,19 @@ def main():
         try:
             command("import", text=json.dumps(author_kit()["example"]))
             for index, (mode, action) in enumerate(cases):
-                if args.suite == "edges":
+                if args.suite in {"edges", "prose"}:
                     command("import", text=json.dumps(author_kit()["example"]))
                     if index == 0:
-                        command("travel", actor="torvin", destination="forest")
+                        command(
+                            "travel",
+                            actor=actor,
+                            destination="workshop" if args.suite == "prose" else "forest",
+                        )
                         command("accept")
                 elif index == 4:
                     command("import", text=json.dumps(export_journal(w.store.read())))
                 started = time.monotonic()
-                state = command("submit", actor="torvin", mode=mode, text=action)
+                state = command("submit", actor=actor, mode=mode, text=action)
                 calls_before_roll = len(state["calls"])
                 if state["pending"]["phase"] == "check":
                     state = command("roll", value=2)

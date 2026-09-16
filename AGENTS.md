@@ -9,3 +9,6 @@ Read `docs/PROJECT_BRIEF.md` before changing product behavior. It records the us
 - Generated text is a GM draft and may contain mistakes. Mechanical effects are validated, visible and transactional; text cannot mutate state. Do not expose this secret-bearing screen/prompt as a player channel.
 - Never reset or play through the user's local saves for tests. Use temporary directories. Keep credentials, logs containing user data and local CLI installation out of Git.
 - Distinguish source checks, live model measurements and published Windows releases. Do not describe a short probe or simulated history as a tested full game.
+
+- The GM is a complete beginner. Keep the spoken passage prominent; settings/import/diagnostics and mechanical review are secondary. Advice must not look like an applied action or remain a sticky hidden mode. One visible hero panel uses name tabs; do not stack every character card.
+- The user permits fresh starts for the current UI iteration. Use isolated test games, then explicitly start the improved example for the user; do not silently play through it.
