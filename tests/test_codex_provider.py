@@ -117,3 +117,19 @@ def test_codex_schema_uses_supported_union_but_keeps_local_validation():
     assert "discriminator" not in json.dumps(schema)
     assert "anyOf" in json.dumps(schema)
     assert "oneOf" in json.dumps(Proposal.model_json_schema())
+
+
+def test_assistant_schema_constrains_evidence_and_speaker_to_existing_nearby_npc():
+    from dnd_helper.codex_provider import request_schema
+    from dnd_helper.free_world import Advice, initial_world
+
+    world = initial_world()
+    world["action"] = {"actor": "mira"}
+    schema = request_schema(Advice, world)["properties"]
+    assert schema["evidence"]["items"]["enum"] == ["water", "help"]
+    assert schema["speaker"]["anyOf"][0]["enum"] == ["ada"]
+    world["entities"]["mira"]["location"] = "forest"
+    world["facts"] = {}
+    schema = request_schema(Advice, world)["properties"]
+    assert schema["speaker"] == {"type": "null"}
+    assert schema["evidence"]["maxItems"] == 0

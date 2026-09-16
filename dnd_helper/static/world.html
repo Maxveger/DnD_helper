@@ -3,19 +3,19 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="dnd-token" content="__CSRF__">
-  <title>Свободный мир · Тихая таверна</title>
+  <title>Помощник ведущего · Тихая таверна</title>
   <link rel="stylesheet" href="/static/world.css">
   <script defer src="/static/world.js"></script>
 </head>
 <body>
-<header><a href="/">← Тихая таверна</a><span>Текстовый прототип · Codex</span></header>
+<header><a href="/">← Тихая таверна</a><span>Экран ведущего · текстовый прототип</span></header>
 <main>
-  <h1>Свободный мир</h1>
-  <p class="muted">Описывайте любые действия Миры. Модель предложит последствия, вы решите, принять ли их.</p>
+  <h1>Помощник ведущего</h1>
+  <p class="muted">Игроки говорят и действуют за столом. Вы получаете подсказку, выбираете реплику и подтверждаете изменения. Этот экран содержит секреты.</p>
   <section class="connection">
     <div><strong>Подключение по подписке ChatGPT</strong><p id="connection-status" role="status">Проверяем вход…</p></div>
     <div class="buttons"><button id="check-login">Проверить вход</button><button id="login">Войти через ChatGPT</button></div>
-    <div class="model-choice"><label for="world-model">Модель для игры</label>
+    <div class="model-choice"><label for="world-model">Модель подсказчика</label>
       <select id="world-model" aria-describedby="model-note"></select>
       <span id="model-note" class="muted">Выбор сохраняется только в приложении. Во время хода модель не меняется.</span>
     </div>
@@ -23,22 +23,40 @@
       <p>Установите официальный Codex CLI и перезапустите приложение. Нажмите «Войти через ChatGPT» и завершите вход в своём аккаунте с доступом к Codex. Пароль и ключ в это приложение вводить не нужно.</p>
       <p>Если окно входа не открылось, выполните <code>codex login</code> в терминале, затем «Проверить вход».</p>
       <a href="https://developers.openai.com/codex/cli" target="_blank" rel="noopener noreferrer">Установка Codex</a>
-      <p>Модель для игры выбирается на этой странице; личные настройки Codex остаются прежними. Лимит подписки проверяется в Codex; автоматического перехода на платный API нет.</p>
+      <p>Модель подсказчика выбирается на этой странице; личные настройки Codex остаются прежними. Лимит подписки проверяется в Codex; автоматического перехода на платный API нет.</p>
     </details>
   </section>
   <p id="error" role="alert" hidden></p>
-  <div class="toolbar"><button id="new" class="primary">Начать короткую игру</button><button id="undo" hidden>Отменить принятый ход</button><span id="usage" class="muted"></span></div>
+  <details class="card" id="documents"><summary>Свой сценарий и журнал игры</summary>
+    <p>Подготовьте мир в браузерном GPT с комплектом автора. Вставьте JSON <code>dnd-world@1</code> или загрузите журнал <code>dnd-world-log@1</code> для продолжения. Проверка бесплатная и локальная.</p>
+    <div class="buttons"><button id="author-kit">Скачать комплект для GPT</button><button id="example-document">Подставить пример</button><button id="export-log">Скачать журнал</button></div>
+    <label for="document-file">Загрузить JSON-файл</label><input type="file" id="document-file" accept=".json,application/json">
+    <textarea id="document-text" rows="4" maxlength="500000" aria-label="Документ сценария или журнал" placeholder="Вставьте документ из GPT или содержимое сохранённого журнала"></textarea>
+    <div class="buttons"><button id="validate-document">Проверить документ</button><button id="import-document" class="primary" hidden>Начать с этим документом</button></div>
+    <pre id="document-report" role="status"></pre>
+    <p class="muted">Сценарии dnd-adventure@1 открываются в прежнем режиме по ссылке сверху. Чужие правила не подменяются автоматически. Журнал содержит секреты ведущего; незавершённая карточка в экспорт не входит.</p>
+  </details>
+  <div class="toolbar"><button id="new" class="primary">Открыть пример</button><button id="undo" hidden>Отменить принятый ход</button><span id="usage" class="muted"></span></div>
   <div id="table" class="layout" hidden>
     <section class="play">
-      <div id="history" aria-live="polite"></div>
+      <section class="card"><h2>Текущая сцена</h2><div id="scene"></div></section>
       <section id="pending" hidden></section>
       <form id="action-form">
-        <label for="action">Что делает Мира?</label>
-        <textarea id="action" rows="3" maxlength="2000" placeholder="Например: обещаю Аде помочь, но сначала иду к лесу поискать родник" required></textarea>
-        <div class="buttons"><button id="send" class="primary" type="submit">Предложить действие</button><span id="next" class="muted"></span></div>
+        <div class="buttons"><label for="actor">Герой</label><select id="actor"></select>
+        <label for="request-mode">Задача</label><select id="request-mode"><option value="action">Разрешить заявку игрока</option><option value="hint">Подсказать ведущему</option></select></div>
+        <label for="action">Заявка игрока или вопрос ведущего</label>
+        <textarea id="action" rows="3" maxlength="2000" placeholder="Например: игрок хочет уговорить Аду дать инструменты. Как разрешить это без лишнего броска?" required></textarea>
+        <div class="buttons"><button id="send" class="primary" type="submit">Получить подсказку</button><span id="next" class="muted"></span></div>
       </form>
+      <details class="card"><summary>Веду сам · записать решение без модели</summary>
+        <p class="muted">Запишите уже случившееся за столом. Запись станет фактом памяти; HP, предметы и позиции она сама не пересчитывает.</p>
+        <textarea id="manual-note" maxlength="600" rows="2" aria-label="Решение ведущего"></textarea>
+        <select id="note-visibility" aria-label="Кто знает запись"><option value="gm">Только ведущий</option><option value="public">Выбранный герой знает</option></select>
+        <button id="save-note">Записать без модели</button>
+      </details>
+      <details class="card"><summary>Журнал и принятые карточки <span id="event-count"></span></summary><div id="history"></div></details>
     </section>
-    <aside><section class="card"><h2>Мира и окружение</h2><div id="world"></div></section>
+    <aside><section class="card"><h2>Герои и окружение</h2><div id="world"></div></section>
       <section class="card"><h2>Память игры</h2><div id="facts"></div></section>
       <details class="card"><summary>Диагностика запросов</summary><div id="calls"></div></details>
     </aside>

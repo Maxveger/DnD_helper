@@ -9,6 +9,7 @@ destination.parent.mkdir(exist_ok=True)
 folders = ["dnd_helper", "tests", "scripts", "docs", ".github"]
 files = [
     "README.md",
+    "AGENTS.md",
     "CONTRIBUTING.md",
     "pyproject.toml",
     "uv.lock",

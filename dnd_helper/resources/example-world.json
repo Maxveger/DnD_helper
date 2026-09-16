@@ -1,0 +1,171 @@
+{
+  "format": "dnd-world@1",
+  "id": "dry_well",
+  "version": "1.0.0",
+  "title": "Засохший колодец",
+  "lore": "Небольшая деревня у леса. Приключение для ведущего и одного-двух новичков на 30–40 минут.",
+  "intro": "У колодца вас встречает Ада: «С утра ни капли. Поможете разобраться?»",
+  "gm_notes": "Ведущий помогает 1–2 новичкам сыграть за 30–40 минут. Начни с просьбы Ады. Можно осмотреть механизм, поговорить с Адой или исследовать лес. Не вынуждай идти одним путём. Ада не знает причину поломки, но узнает затвор при осмотре.",
+  "boundaries": [
+    "Причина исчезновения воды неизменна: ветка заклинила затвор у лесного водозабора. Не подменяй её проклятием или злодеем.",
+    "Новые места, прохожие и способы ремонта допустимы. Не выдавай решение и скрытую причину раньше исследования.",
+    "Без жестокости. Бой необязателен; герои вправе отказаться от помощи."
+  ],
+  "rules": {
+    "engine": "hybrid-simple@1",
+    "manual_rules": []
+  },
+  "entities": [
+    {
+      "id": "square",
+      "kind": "location",
+      "name": "Деревенская площадь",
+      "description": "У колодца стоит пустое ведро. Тропа ведёт к лесу, рядом мастерская.",
+      "location": null,
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "workshop",
+      "kind": "location",
+      "name": "Мастерская Ады",
+      "description": "Деревянный навес с рабочим столом.",
+      "location": null,
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "forest",
+      "kind": "location",
+      "name": "Лесная тропа",
+      "description": "Тропа уходит от деревни между соснами.",
+      "location": null,
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "ada",
+      "kind": "npc",
+      "name": "Ада",
+      "description": "Мастер по водяным механизмам.",
+      "location": "square",
+      "goal": "Вернуть воду в деревню; ценит помощь и честность.",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "mira",
+      "kind": "hero",
+      "name": "Мира",
+      "description": "Любознательная следопытка.",
+      "location": "square",
+      "goal": "",
+      "hp": 8,
+      "max_hp": 8,
+      "stats": {
+        "strength": 1,
+        "agility": 2,
+        "mind": 1
+      }
+    },
+    {
+      "id": "rope",
+      "kind": "item",
+      "name": "Верёвка",
+      "description": "Крепкая верёвка длиной десять метров.",
+      "location": "mira",
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "bandage",
+      "kind": "item",
+      "name": "Перевязь",
+      "description": "Одна чистая перевязь.",
+      "location": "mira",
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "bucket",
+      "kind": "item",
+      "name": "Ведро",
+      "description": "Пустое ведро у колодца.",
+      "location": "square",
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "torvin",
+      "kind": "hero",
+      "name": "Торвин",
+      "description": "Терпеливый ремесленник, умеет обращаться с инструментами.",
+      "location": "square",
+      "goal": "",
+      "hp": 8,
+      "max_hp": 8,
+      "stats": {
+        "strength": 2,
+        "agility": 0,
+        "mind": 1
+      }
+    }
+  ],
+  "facts": [
+    {
+      "id": "water",
+      "text": "С утра в деревенском колодце нет воды. Причина пока не установлена.",
+      "status": "fact",
+      "visibility": "public",
+      "known_by": [
+        "mira",
+        "ada",
+        "torvin"
+      ],
+      "resolved": false
+    },
+    {
+      "id": "help",
+      "text": "Ада просит помощи с водой. Мира вправе отказаться и уйти исследовать окрестности.",
+      "status": "fact",
+      "visibility": "public",
+      "known_by": [
+        "mira",
+        "ada",
+        "torvin"
+      ],
+      "resolved": false
+    },
+    {
+      "id": "water_truth",
+      "text": "Ветка заклинила затвор у лесного водозабора, поэтому вода перестала поступать в колодец. Это пока никому из героев и Аде не известно.",
+      "status": "fact",
+      "visibility": "gm",
+      "known_by": [],
+      "resolved": false
+    }
+  ],
+  "connections": [
+    [
+      "square",
+      "workshop"
+    ],
+    [
+      "square",
+      "forest"
+    ]
+  ]
+}

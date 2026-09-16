@@ -121,6 +121,24 @@ def create_app(directory=None, background=True, shutdown=None):
     def world_model(body: WorldModelInput):
         return service.free_world.set_model(body.model)
 
+    @app.post("/api/world/validate")
+    def world_validate(body: AdventureInput):
+        from .world_documents import validation_report
+
+        return validation_report(body.text)
+
+    @app.get("/api/world/author-kit")
+    def world_author_kit():
+        from .world_documents import author_kit as world_kit
+
+        return world_kit()
+
+    @app.get("/api/world/export")
+    def world_export():
+        from .world_documents import export_journal
+
+        return export_journal(service.free_world.store.read())
+
     @app.post("/api/world/command")
     def world_command(body: Command):
         if service.free_world.store.read() and body.revision is None:

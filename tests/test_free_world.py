@@ -7,8 +7,7 @@ from fastapi.testclient import TestClient
 from dnd_helper.engine import uid
 from dnd_helper.free_world import (
     FreeWorld,
-    Proposal,
-    Verdict,
+    Advice,
     Story,
     initial_world,
     apply_operations,
@@ -19,15 +18,18 @@ from dnd_helper.web import create_app
 
 
 def proposal(ops=None, check=None):
-    return Proposal.model_validate(
+    return Advice.model_validate(
         dict(
             summary="Решение",
+            gm_hint="Спросите игрока о намерении; ведущий решает сам.",
             evidence=["water"],
             question=None,
             speaker=None,
             check=check,
-            success={"summary": "Получилось", "operations": ops or []},
-            failure={"summary": "Не получилось", "operations": []} if check else None,
+            success={"summary": "Получилось", "read_aloud": "Мира осмотрелась.", "operations": ops or []},
+            failure={"summary": "Не получилось", "read_aloud": "Попытка не удалась.", "operations": []}
+            if check
+            else None,
         )
     )
 
@@ -37,13 +39,14 @@ class FakeProvider:
         self.plan = plan or proposal()
         self.inputs = []
         self.fail_narrate = False
+        self.fail_assist = False
 
     def structured(self, instruction, payload, schema, cancel, model=""):
         self.inputs.append((schema, deepcopy(payload)))
-        if schema is Proposal:
+        if schema is Advice:
+            if self.fail_assist:
+                raise GameError("Временный отказ")
             return self.plan, {"usage": {"input_tokens": 10, "output_tokens": 10}}
-        if schema is Verdict:
-            return Verdict(accepted=True, reason="Согласовано"), {}
         if self.fail_narrate:
             raise GameError("Временный отказ")
         return Story(text="Мира осмотрелась."), {}
@@ -92,7 +95,7 @@ def test_world_does_not_apply_until_accepted_and_undo_keeps_usage(tmp_path):
     s = command(restored, "undo")
     assert s["entities"]["bucket"]["location"] == "square"
     assert "promise_ada" not in s["facts"]
-    assert len(s["calls"]) == 3
+    assert len(s["calls"]) == 1
 
 
 def test_atomic_invalid_second_effect_and_double_spend():
@@ -143,13 +146,21 @@ def test_new_place_persists_and_can_return(tmp_path):
     assert "grove" in s["entities"]
 
 
-def test_roll_pinned_on_narrator_failure_and_retry(tmp_path):
+def test_legacy_roll_pinned_on_narrator_failure_and_retry(tmp_path):
     provider = FakeProvider(proposal(check={"stat": "agility", "difficulty": "hard"}))
     provider.fail_narrate = True
     w = FreeWorld(tmp_path, provider)
     command(w, "new")
     s = command(w, "submit", text="Спускаюсь в колодец.")
     assert s["pending"]["phase"] == "check"
+
+    # Existing saved checks remain compatible; only those may call a legacy narrator.
+    def legacy(s, db):
+        for key in ("success", "failure"):
+            s["pending"]["proposal"][key].pop("read_aloud")
+        return s
+
+    w.store.mutate(uid(), None, legacy)
     s = command(w, "roll", value=4)
     assert s["pending"]["phase"] == "error"
     roll = s["pending"]["roll"]
@@ -160,7 +171,7 @@ def test_roll_pinned_on_narrator_failure_and_retry(tmp_path):
     s = command(w, "retry")
     assert s["pending"]["phase"] == "ready"
     assert s["pending"]["roll"] == roll
-    assert sum(schema is Proposal for schema, _ in provider.inputs) == 1
+    assert sum(schema is Advice for schema, _ in provider.inputs) == 1
 
 
 def test_npc_narrator_does_not_receive_private_or_other_knowledge():
@@ -237,54 +248,44 @@ def test_world_routes_protected_and_old_game_untouched(tmp_path):
         )
 
 
-def test_known_move_uses_two_calls_and_critic_still_checks_new_places(tmp_path):
+def test_known_move_uses_one_assistant_call(tmp_path):
     move = {"op": "move", "entity": "mira", "before": "square", "destination": "forest"}
     provider = FakeProvider(proposal([move]))
     w = FreeWorld(tmp_path, provider)
     command(w, "new")
     s = command(w, "submit", text="Иду к лесу.")
     assert s["pending"]["phase"] == "ready"
-    assert [schema for schema, _ in provider.inputs] == [Proposal, Story]
+    assert [schema for schema, _ in provider.inputs] == [Advice]
     command(w, "accept")
     assert w.store.read()["entities"]["mira"]["location"] == "forest"
 
 
 def test_call_ceiling_survives_restart_and_retries(tmp_path):
     provider = FakeProvider()
-    provider.fail_narrate = True
+    provider.fail_assist = True
     w = FreeWorld(tmp_path, provider)
     command(w, "new")
     command(w, "submit", text="Осмотрюсь")
     command(w, "retry")
     command(w, "retry")
     s = w.store.read()
-    assert len(s["calls"]) == 4  # Plan once, then three attempts at narration.
+    assert len(s["calls"]) == 3  # Only explicit retries, one call each.
     w2 = FreeWorld(tmp_path, provider)
     with pytest.raises(GameError, match="Три попытки"):
         command(w2, "retry")
-    assert len(w2.store.read()["calls"]) == 4
+    assert len(w2.store.read()["calls"]) == 3
 
 
-def test_stale_accept_and_failed_critic_cannot_change_world(tmp_path):
-    class Reject(FakeProvider):
-        def structured(self, instruction, payload, schema, cancel, model=""):
-            if schema is Verdict:
-                return Verdict(accepted=False, reason="Не согласуется с фактом water"), {}
-            return super().structured(instruction, payload, schema, cancel, model)
-
-    op = {
-        "op": "remember",
-        "id": "false_past",
-        "text": "С утра вода была.",
-        "status": "fact",
-        "visibility": "public",
-        "known_by": ["mira"],
-    }
-    w = FreeWorld(tmp_path, Reject(proposal([op])))
+def test_stale_accept_and_invalid_evidence_cannot_change_world(tmp_path):
+    plan = proposal()
+    plan.evidence = ["invented_fact"]
+    w = FreeWorld(tmp_path, FakeProvider(plan))
     command(w, "new")
+    before = w.store.read()["entities"]
     s = command(w, "submit", text="Пусть вода всегда была.")
     assert s["pending"]["phase"] == "error"
-    assert "false_past" not in s["facts"]
+    assert s["entities"] == before
+    assert len(s["calls"]) == 1
     with pytest.raises(GameError):
         w.command("accept", {}, uid(), s["revision"] - 1)
 

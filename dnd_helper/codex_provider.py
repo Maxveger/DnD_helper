@@ -43,6 +43,30 @@ def output_schema(schema_class):
     return convert(schema_class.model_json_schema())
 
 
+def request_schema(schema_class, payload):
+    schema_data = output_schema(schema_class)
+    # Constrain evidence IDs at generation as well as during local validation.
+    if schema_class.__name__ in {"Proposal", "Advice"} and "facts" in payload:
+        items = schema_data["properties"]["evidence"]["items"]
+        if payload["facts"]:
+            items["enum"] = list(payload["facts"])
+        else:
+            schema_data["properties"]["evidence"]["maxItems"] = 0
+        if "speaker" in schema_data["properties"] and "entities" in payload:
+            actor = payload["entities"].get(payload.get("action", {}).get("actor"), {})
+            speakers = [
+                e["id"]
+                for e in payload["entities"].values()
+                if e["kind"] == "npc" and e["location"] == actor.get("location")
+            ]
+            schema_data["properties"]["speaker"] = (
+                {"anyOf": [{"type": "string", "enum": speakers}, {"type": "null"}]}
+                if speakers
+                else {"type": "null"}
+            )
+    return schema_data
+
+
 class CodexProvider:
     def __init__(self, executable=None, timeout=120):
         self.executable = executable
@@ -228,14 +252,7 @@ class CodexProvider:
         with self.lock, tempfile.TemporaryDirectory(prefix="dnd-codex-") as folder:
             root = Path(folder)
             schema = root / "response.schema.json"
-            schema_data = output_schema(schema_class)
-            # Constrain evidence IDs at generation as well as during local validation.
-            if schema_class.__name__ == "Proposal" and "facts" in payload:
-                items = schema_data["properties"]["evidence"]["items"]
-                if payload["facts"]:
-                    items["enum"] = list(payload["facts"])
-                else:
-                    schema_data["properties"]["evidence"]["maxItems"] = 0
+            schema_data = request_schema(schema_class, payload)
             schema.write_text(json.dumps(schema_data), encoding="utf-8")
             role = root / "role.txt"
             role.write_text(TEXT_ROLE, encoding="utf-8")

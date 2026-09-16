@@ -1,6 +1,7 @@
 """Isolated browser check with deterministic model responses; never consumes a subscription."""
 
 import socket
+import json
 import tempfile
 import threading
 import time
@@ -9,7 +10,7 @@ from pathlib import Path
 import uvicorn
 from playwright.sync_api import sync_playwright, expect
 
-from dnd_helper.free_world import Proposal, Verdict, Story
+from dnd_helper.free_world import Advice
 from dnd_helper.web import create_app
 
 
@@ -21,45 +22,46 @@ class Stub:
         pass
 
     def structured(self, instruction, payload, schema, cancel, model=""):
-        if schema is Proposal:
+        if schema is Advice:
+            hint = payload["action"].get("mode") == "hint"
+            actor = payload["action"]["actor"]
             risky = "колодец" in payload["action"]["text"]
-            value = Proposal.model_validate(
+            value = Advice.model_validate(
                 dict(
                     summary="Нужна проверка ловкости" if risky else "Мира берёт ведро и обещает вернуться.",
+                    gm_hint="Предложите игроку описать намерение. Не решайте за него.",
                     evidence=["water"],
                     question=None,
                     speaker=None,
                     check={"stat": "agility", "difficulty": "standard"} if risky else None,
                     success={
+                        "read_aloud": "Черновик реплики для ведущего.",
                         "summary": "Переход завершён" if risky else "Ведро у Миры; обещание записано.",
                         "operations": []
-                        if risky
+                        if risky or hint
                         else [
-                            {"op": "transfer", "item": "bucket", "before": "square", "destination": "mira"},
+                            {"op": "transfer", "item": "bucket", "before": "square", "destination": actor},
                             {
                                 "op": "remember",
                                 "id": "promise",
                                 "text": "Мира обещала вернуться.",
                                 "status": "promise",
                                 "visibility": "public",
-                                "known_by": ["ada", "mira"],
+                                "known_by": ["ada", actor],
                             },
                         ],
                     },
                     failure={
+                        "read_aloud": "Герой ушибся, но может продолжать.",
                         "summary": "Мира ушиблась: −2 HP.",
-                        "operations": [{"op": "damage", "entity": "mira"}],
+                        "operations": [{"op": "damage", "entity": actor}],
                     }
                     if risky
                     else None,
                 )
             )
-        elif schema is Verdict:
-            value = Verdict(accepted=True, reason="Согласовано")
         else:
-            value = Story(
-                text="Мира берёт ведро." if not payload.get("roll") else "Мира ушиблась, но может продолжать."
-            )
+            raise AssertionError("Only one assistant call is expected")
         return value, {"seconds": 0.1, "usage": {"input_tokens": 10, "output_tokens": 10}}
 
 
@@ -109,6 +111,57 @@ def main():
                 page.locator("#undo").click()
                 expect(page.locator("#world")).to_contain_text("8/8 HP")
                 expect(page.locator("#facts")).to_contain_text("Мира обещала вернуться.")
+                # A known move is prepared without consulting the stub/model.
+                count = len(app.state.service.free_world.store.read()["calls"])
+                page.get_by_role("button", name="Перейти: Лесная тропа").click()
+                page.get_by_role("button", name="Принять исход").click()
+                expect(page.locator("#world")).to_contain_text("Лесная тропа")
+                assert len(app.state.service.free_world.store.read()["calls"]) == count
+                page.locator("#undo").click()
+                # File import, repair guidance, two heroes and a GM question.
+                page.locator("#documents > summary").click()
+                page.locator("#document-text").fill("{}")
+                page.locator("#validate-document").click()
+                expect(page.locator("#document-report")).to_contain_text("Ошибки")
+                page.locator("#example-document").click()
+                page.wait_for_function(
+                    "document.getElementById('document-text').value.includes('dnd-world@1')"
+                )
+                page.locator("#validate-document").click()
+                expect(page.locator("#import-document")).to_be_visible()
+                page.on("dialog", lambda dialog: dialog.accept())
+                page.locator("#import-document").click()
+                expect(page.locator("#world")).to_contain_text("Торвин")
+                page.locator("#actor").select_option("torvin")
+                page.locator("#request-mode").select_option("hint")
+                page.locator("#action").fill("Игроки растерялись. Что предложить ведущему?")
+                page.locator("#send").click()
+                expect(page.get_by_role("button", name="Принять исход")).to_be_visible()
+                page.locator("#pending details").last.locator("summary").click()
+                page.get_by_label("Исправить реплику").fill("Ада ждёт вашего решения.")
+                page.get_by_label("Исправить итог").fill("Ведущий предложил два подхода.")
+                page.get_by_role("button", name="Сохранить правки").click()
+                expect(page.locator("#pending")).to_contain_text("Правки ведущего сохранены")
+                page.reload()
+                expect(page.locator("#pending")).to_contain_text("Ада ждёт вашего решения.")
+                page.get_by_role("button", name="Принять исход").click()
+                expect(page.locator("#history")).to_contain_text("Вопрос ведущего")
+                page.locator("#documents > summary").click()
+                with page.expect_download() as download_info:
+                    page.locator("#export-log").click()
+                journal_path = Path(folder) / "journal.json"
+                download_info.value.save_as(journal_path)
+                journal = json.loads(journal_path.read_text("utf-8"))
+                assert journal["format"] == "dnd-world-log@1"
+                assert journal["events"][0]["edited"]
+                page.locator("#document-file").set_input_files(journal_path)
+                page.wait_for_function(
+                    "document.getElementById('document-text').value.includes('dnd-world-log@1')"
+                )
+                page.locator("#validate-document").click()
+                expect(page.locator("#document-report")).to_contain_text("Записей журнала: 1")
+                page.locator("#import-document").click()
+                expect(page.locator("#history")).to_contain_text("Ада ждёт вашего решения.")
                 Path("/tmp/dnd-world-browser").mkdir(exist_ok=True)
                 page.screenshot(path="/tmp/dnd-world-browser/desktop.png", full_page=True)
                 page.set_viewport_size({"width": 390, "height": 844})
@@ -116,7 +169,9 @@ def main():
                 page.screenshot(path="/tmp/dnd-world-browser/mobile.png", full_page=True)
                 assert not errors, errors
                 browser.close()
-                print("Browser: proposal, reload, acceptance, check, failure, undo, mobile OK")
+                print(
+                    "Browser: GM advice, edit, reload, dice, undo, local travel, custom scenario, journal roundtrip, mobile OK"
+                )
         finally:
             app.state.service.free_world.close()
             server.should_exit = True
