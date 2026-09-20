@@ -23,7 +23,7 @@
     <h1>Вы ведёте. Мы помогаем.</h1>
     <p>Прочитайте начало истории, выслушайте игроков и опишите их действие. Помощник предложит продолжение, а решение останется за вами.</p>
     <div class="buttons"><button id="start-example" class="primary">Начать «Засохший колодец»</button><button id="start-custom">Загрузить свою историю</button></div>
-    <p class="muted">30–40 минут · два готовых героя · простые правила</p>
+    <p class="muted">Короткий учебный сценарий · два готовых героя · простые правила</p>
     <p id="welcome-connection" role="status"></p>
   </section>
   <div id="table" hidden>
@@ -34,9 +34,11 @@
         <section id="reading" class="reading" aria-label="Реплика для чтения"></section>
         <section id="pending" aria-live="polite" hidden></section>
         <form id="action-form" class="composer">
-          <div class="composer-heading"><h2 id="action-title">Что делает игрок?</h2><button id="ask-hint" type="button" class="text-button">Нужна подсказка</button><button id="back-action" type="button" class="text-button" hidden>← К действию игрока</button></div>
+          <div class="composer-heading"><h2 id="action-title">Что делают игроки?</h2><button id="direct-model" type="button" class="text-button">Направить помощника</button><button id="ask-hint" type="button" class="text-button">Нужна подсказка</button><button id="back-action" type="button" class="text-button" hidden>← К действию игроков</button></div>
           <p id="mode-note" class="muted"></p>
+          <div id="director-note" class="gm-note" hidden></div>
           <div class="actor-control"><label for="actor">Действует</label><select id="actor"></select></div>
+          <fieldset id="participants-control"><legend>Помогают в этом же действии</legend><div id="participants"></div><p class="muted">Отмечайте только тех, кто действительно участвует и находится рядом.</p></fieldset>
           <textarea id="action" rows="3" maxlength="2000" aria-label="Заявка игрока или вопрос ведущего" placeholder="Например: Мира внимательно осматривает рабочий стол Ады." required></textarea>
           <div class="buttons"><button id="send" class="primary" type="submit">Разобрать действие</button><span id="next" class="muted"></span></div>
         </form>
@@ -48,7 +50,7 @@
         <details class="subtle-section"><summary>Журнал игры <span id="event-count"></span></summary><div id="history"></div></details>
       </section>
       <aside aria-label="Памятка ведущего">
-        <section class="side-card"><h2>Помнить за столом</h2><div id="facts"></div><details id="secrets"><summary>Тайны ведущего <span id="secret-count"></span></summary><div id="secret-facts"></div></details></section>
+        <section class="side-card"><h2>Ставки истории</h2><div id="threads"></div><h2>Помнить за столом</h2><div id="facts"></div><details id="secrets"><summary>Тайны ведущего <span id="secret-count"></span></summary><div id="secret-facts"></div></details></section>
         <section class="side-card"><h2>Герои</h2><div id="hero-tabs" role="tablist" aria-label="Выбрать героя"></div><div id="world" role="tabpanel"></div></section>
       </aside>
     </div>
@@ -76,9 +78,10 @@
 </dialog>
 <dialog id="lore-dialog" aria-labelledby="lore-title"><div class="dialog-heading"><h2 id="lore-title">Мир и история</h2><button data-close="lore-dialog" aria-label="Закрыть описание мира">✕</button></div><div id="lore-content"></div></dialog>
 <dialog id="guide-dialog" aria-labelledby="guide-title"><div class="dialog-heading"><h2 id="guide-title">Ваш первый вечер в роли ведущего</h2><button data-close="guide-dialog" aria-label="Закрыть памятку">✕</button></div>
-  <ol class="guide-steps"><li><strong>Задайте сцену.</strong> Прочитайте крупный текст вслух. Можно своими словами. Затем спросите: «Что вы делаете?»</li><li><strong>Выслушайте игрока.</strong> Выберите его героя и запишите действие. Знать все правила заранее не нужно.</li><li><strong>Прочитайте продолжение.</strong> Помощник предложит реплику. Если что-то смущает, откройте «Проверить последствия» или исправьте текст.</li><li><strong>Если нужен бросок.</strong> Попросите игрока бросить двадцатигранный кубик и введите выпавшее число. Можно бросить прямо в приложении.</li><li><strong>Подтвердите результат.</strong> «Применить и продолжить» запишет последствия. Если передумали, последнюю запись можно отменить.</li></ol>
+  <ol class="guide-steps"><li><strong>Задайте сцену.</strong> Прочитайте крупный текст вслух. Можно своими словами. Затем спросите: «Что вы делаете?»</li><li><strong>Выслушайте игроков.</strong> Выберите ведущего героя, при общем действии отметьте помощников и запишите цель целиком. Знать все правила заранее не нужно.</li><li><strong>Прочитайте продолжение.</strong> Помощник предложит реплику. Если что-то смущает, откройте «Проверить последствия» или исправьте текст.</li><li><strong>Если нужен бросок.</strong> Приложение назовёт одного героя и учтёт помощь. Введите результат d20 или бросьте прямо в приложении.</li><li><strong>Подтвердите результат.</strong> «Применить и продолжить» запишет последствия. Необратимый риск будет отмечен отдельно. Если передумали, последнюю запись можно отменить.</li></ol>
   <p>«Нужна подсказка» — разговор с помощником для вас. Такой совет не перемещает героев и не меняет вещи.</p><p class="muted">Этот экран видит ведущий: в памятке и скрытых блоках есть сюжетные тайны. Игрокам вы читаете выбранную реплику.</p>
 </dialog>
 <dialog id="edit-dialog" aria-labelledby="edit-title"><div class="dialog-heading"><h2 id="edit-title">Исправить карточку</h2><button data-close="edit-dialog" aria-label="Закрыть редактор">✕</button></div><label for="edit-text">Реплика для чтения</label><textarea id="edit-text" maxlength="1800" rows="6"></textarea><label for="edit-summary">Итог в журнале</label><textarea id="edit-summary" maxlength="800" rows="2"></textarea><h3>Применить эти изменения</h3><div id="edit-effects"></div><p class="muted">Текст не меняет механику. Можно убрать лишние эффекты; связанные изменения проверит программа.</p><p id="edit-error" role="alert" hidden></p><button id="save-edit" class="primary">Сохранить правки</button></dialog>
+<dialog id="redirect-dialog" aria-labelledby="redirect-title"><div class="dialog-heading"><h2 id="redirect-title">Направить помощника</h2><button data-close="redirect-dialog" aria-label="Закрыть указание">✕</button></div><p>Скажите, что исправить в этой карточке. Указание обязательно для следующего варианта, пока оно не противоречит неизменным фактам мира.</p><textarea id="redirect-text" maxlength="600" rows="4" aria-label="Исправление ведущего"></textarea><p class="muted">Например: «Покажи Журнал трёх убийств, но пока не раскрывай его содержание».</p><button id="save-redirect" class="primary">Пересобрать карточку</button></dialog>
 </body>
 </html>

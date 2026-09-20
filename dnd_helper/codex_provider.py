@@ -33,11 +33,14 @@ def output_schema(schema_class):
         if isinstance(value, list):
             return [convert(item) for item in value]
         if isinstance(value, dict):
-            return {
+            converted = {
                 ("anyOf" if key == "oneOf" else key): convert(item)
                 for key, item in value.items()
-                if key != "discriminator"
+                if key not in {"discriminator", "default", "minItems", "title"}
             }
+            if converted.get("type") == "object" and "properties" in converted:
+                converted["required"] = list(converted["properties"])
+            return converted
         return value
 
     return convert(schema_class.model_json_schema())
@@ -45,25 +48,42 @@ def output_schema(schema_class):
 
 def request_schema(schema_class, payload):
     schema_data = output_schema(schema_class)
+    facts = payload.get("known_facts") or payload.get("facts") or payload.get("scene", {}).get("facts", {})
+    entities = (
+        payload.get("visible_entities")
+        or payload.get("entities")
+        or payload.get("scene", {}).get("entities", {})
+    )
+    entity_index = payload.get("entity_index", entities)
     # Constrain evidence IDs at generation as well as during local validation.
-    if schema_class.__name__ in {"Proposal", "Advice"} and "facts" in payload:
+    if schema_class.__name__ in {"Proposal", "Advice", "DirectorCard"}:
         items = schema_data["properties"]["evidence"]["items"]
-        if payload["facts"]:
-            items["enum"] = list(payload["facts"])
+        if facts:
+            items["enum"] = list(facts)
         else:
             schema_data["properties"]["evidence"]["maxItems"] = 0
-        if "speaker" in schema_data["properties"] and "entities" in payload:
-            actor = payload["entities"].get(payload.get("action", {}).get("actor"), {})
+        if "speaker" in schema_data["properties"]:
             speakers = [
                 e["id"]
-                for e in payload["entities"].values()
-                if e["kind"] == "npc" and e["location"] == actor.get("location")
+                for e in entities.values()
+                if e["kind"] == "npc"
             ]
             schema_data["properties"]["speaker"] = (
                 {"anyOf": [{"type": "string", "enum": speakers}, {"type": "null"}]}
                 if speakers
                 else {"type": "null"}
             )
+        if schema_class.__name__ in {"Advice", "DirectorCard"}:
+            targets = schema_data["$defs"]["Intent"]["properties"]["targets"]["items"]
+            targets["enum"] = list(entity_index) + list(facts)
+        if schema_class.__name__ == "DirectorCard":
+            destinations = [
+                item["destination"]
+                for item in payload.get("travel_options", [])
+                if isinstance(item.get("destination"), str)
+            ]
+            if destinations:
+                schema_data["$defs"]["TravelEffect"]["properties"]["destination"]["enum"] = destinations
     return schema_data
 
 
@@ -261,23 +281,24 @@ class CodexProvider:
             )
             (root / "input.txt").write_text(prompt, encoding="utf-8")
             args = self.binary() + [
-                "exec",
-                "--ephemeral",
-                "--ignore-user-config",
-                "--skip-git-repo-check",
                 "--sandbox",
                 "read-only",
-                "--json",
-                "--color",
+                "--ask-for-approval",
                 "never",
-                "--output-schema",
-                str(schema),
             ]
             args += self.options(folder)
             args += ["-c", "model_instructions_file=" + json.dumps(str(role))]
             model = model or self.selected_model()
             if model:
                 args += ["--model", model]
+            args += ["exec", "--ephemeral"]
+            args += [
+                "--ignore-user-config",
+                "--skip-git-repo-check",
+                "--json",
+                "--output-schema",
+                str(schema),
+            ]
             args += ["-"]
             started = time.monotonic()
             with (
@@ -290,7 +311,7 @@ class CodexProvider:
                     stdin=src,
                     stdout=out,
                     stderr=err,
-                    cwd=folder,
+                    cwd=tempfile.gettempdir(),
                     env=self.environment(),
                     **self.process_options(),
                 )

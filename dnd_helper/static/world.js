@@ -1,6 +1,7 @@
 const $ = id => document.getElementById(id);
 let state = null, sending = false, lastView = '', connected = false;
 let requestMode = 'action', selectedHero = '', viewedHero = '', gameId = null, editId = null, validatedText = null;
+let selectedParticipants = new Set();
 async function api(path, body) {
   const response = await fetch('/api/' + path, {method: body ? 'POST' : 'GET',
     headers: {'Content-Type': 'application/json', 'X-Dnd-Token': document.querySelector('meta[name=dnd-token]').content},
@@ -30,12 +31,22 @@ function describeOperation(op, entities) {
   switch (op.op) {
     case 'create': return 'Появится: ' + op.entity.name + '. ' + op.entity.description;
     case 'move': return `${name(op.entity)}: ${name(op.before)} → ${name(op.destination)}`;
+    case 'move_path': return `${name(op.entity)}: ${op.route.map(name).join(' → ')}`;
     case 'transfer': return `${name(op.item)}: ${name(op.before)} → ${name(op.destination)}`;
     case 'consume': return 'Потратить: ' + name(op.item);
-    case 'damage': return name(op.entity) + ': −2 здоровья (не ниже 1)';
+    case 'damage': return name(op.entity) + ': −2 здоровья; при 0 герой погибает';
     case 'heal': return name(op.entity) + ': +3 здоровья (до максимума)';
     case 'remember': return (op.visibility === 'gm' ? 'Тайна: ' : 'Запомнить: ') + op.text;
-    case 'resolve_promise': return 'Обещание выполнено: ' + (state.game.facts[op.id]?.text || op.id);
+    case 'discover': return 'Открытие: ' + (state.game.facts[op.fact]?.text || op.fact);
+    case 'share_fact': return `${name(op.source)} сообщает: ${op.recipients.map(name).join(', ')}`;
+    case 'observe': return 'Осмотрено: ' + name(op.subject);
+    case 'present': return 'Выведено в сцену: ' + name(op.subject);
+    case 'set_state': return `${name(op.entity)}: ${op.before} → ${op.after}`;
+    case 'react_state': return `Обязательное последствие: ${name(op.entity)} — ${op.before} → ${op.after}`;
+    case 'resolve_promise': return 'Обещание или задача выполнены: ' + (state.game.facts[op.id]?.text || op.id);
+    case 'advance_thread': return `Давление «${state.game.threads[op.thread]?.title||op.thread}»: ${op.before} → ${op.after}`;
+    case 'resolve_thread': return `Развязка «${state.game.threads[op.thread]?.title||op.thread}»: ${op.outcome}`;
+    case 'finish_session': return `Финал (${op.ending}): ${op.summary}`;
   }
 }
 async function command(kind, data = {}) {
@@ -47,8 +58,8 @@ async function command(kind, data = {}) {
   let ok = false;
   try {
     state = await api('world/command', {kind, data, command_id: crypto.randomUUID(), revision: state?.game?.revision ?? null});
-    if (kind === 'submit') { $('action').value = ''; requestMode = 'action'; }
-    if (kind === 'import' || kind === 'new') { $('settings-dialog').close(); requestMode = 'action'; $('action').value = ''; }
+    if (kind === 'submit' || kind === 'direct') { $('action').value = ''; requestMode = 'action'; }
+    if (kind === 'import' || kind === 'new') { $('settings-dialog').close(); requestMode = 'action'; selectedParticipants.clear(); $('action').value = ''; }
     if (kind === 'accept' && viewedHero) selectedHero = viewedHero;
     if (kind === 'cancel' && previousActor) selectedHero = viewedHero = previousActor;
     if (previousText) $('action').value = previousText;
@@ -69,6 +80,10 @@ function renderCard(g, p) {
   $('pending').dataset.id = p?.id || '';
   $('pending').hidden = !p; $('pending').replaceChildren();
   if (!p) {
+    if (g.session?.status === 'finished') {
+      reading('История завершена',g.session.summary || 'Сессия получила окончательный исход.',`Финал: ${g.session.ending}. Для следующего приключения начните новую сессию.`);
+      return;
+    }
     const last = [...g.events].reverse().find(e=>e.action.mode !== 'hint');
     const narratorHero = g.entities[last?.action.actor || selectedHero];
     const place = g.entities[narratorHero.location];
@@ -88,6 +103,11 @@ function renderCard(g, p) {
       reading('Прочитайте игрокам · предложенный исход',p.text || fallback || 'Для этого шага отдельная реплика не нужна.',
         'Прочитайте своими словами. Подтвердите результат, когда он подходит вашей сцене.');
       if(p.proposal?.gm_hint) {const note=text($('pending'),'details','','gm-note'); text(note,'summary','Подсказка ведущему'); text(note,'p',p.proposal.gm_hint);}
+      if(p.proposal?.pressure?.level && p.proposal.pressure.level!=='ordinary') {
+        const pressure=text($('pending'),'div','','pressure '+p.proposal.pressure.level);
+        text(pressure,'strong',p.proposal.pressure.level==='verdict'?'Необратимый приговор':p.proposal.pressure.level==='complication'?'Осложнение':'Знак Хранителя');
+        text(pressure,'p',p.proposal.pressure.reason||'Ставки сцены растут.');
+      }
     }
     if(p.roll) text($('pending'),'p',`Кубик: ${p.roll.value} + ${p.roll.bonus} = ${p.roll.value+p.roll.bonus}; нужно ${p.roll.dc}. ${p.roll.success?'Успех':'Неудача'}.`,'roll-result');
     const ops=p.outcome.operations, names={...g.entities};
@@ -106,15 +126,18 @@ function renderCard(g, p) {
     const controls=text($('pending'),'div','','pending-controls');
     $('pending').prepend(controls);
     button(controls,hint?'Понятно · закрыть совет':'Применить и продолжить',()=>command('accept'),'primary');
+    if(!hint)button(controls,'Поправить помощника',()=>{ $('redirect-text').value=''; openDialog('redirect-dialog'); });
     button(controls,'Исправить текст',openEditor);
     button(controls,hint?'Убрать совет':'Отклонить',()=>command('cancel'),'quiet');
     if(p.edited) text($('pending'),'p','Правки ведущего сохранены.','muted');
   } else if(p.phase==='check') {
-    const check=p.proposal.check, hero=g.entities[p.action.actor];
+    const check=p.proposal.check, hero=g.entities[check.actor||p.action.actor];
     const stat={strength:'силы',agility:'ловкости',mind:'смекалки'}[check.stat], dc={easy:10,standard:13,hard:16}[check.difficulty];
-    reading('Сейчас нужен бросок',`Попросите игрока за ${hero.name} бросить двадцатигранный кубик. Проверка ${stat}: нужно набрать ${dc} с учётом бонуса ${hero.stats[check.stat]}.`,'Исход ещё не определён. Обе ветки подготовлены — после кубика ждать помощника не нужно.',true);
+    const helpers=(check.helpers||[]).map(id=>g.entities[id]?.name||id), assist=Math.min(2,helpers.length), total=hero.stats[check.stat]+assist;
+    reading('Сейчас нужен один бросок',`Попросите игрока за ${hero.name} бросить двадцатигранный кубик. Проверка ${stat}: нужно ${dc}; бонус ${total} (${hero.stats[check.stat]} героя${assist?` + ${assist} за помощь`:''}).`+(helpers.length?` Помогают: ${helpers.join(', ')}.`:''),'Обе ветки уже подготовлены — после кубика ждать помощника не нужно.',true);
     const box=text($('pending'),'div','','roll-box');
     text(box,'p',p.proposal.gm_hint || p.proposal.summary);
+    if(p.proposal?.pressure?.level && p.proposal.pressure.level!=='ordinary')text(box,'p',(p.proposal.pressure.level==='verdict'?'Необратимый риск: ':'Давление сцены: ')+(p.proposal.pressure.reason||'ставки растут'),'pressure '+p.proposal.pressure.level);
     const controls=text(box,'div','','buttons');
     const input=document.createElement('input');input.type='number';input.min=1;input.max=20;input.placeholder='1–20';input.setAttribute('aria-label','Результат физического кубика');controls.append(input);
     button(controls,'Ввести бросок',()=>{if(input.value)command('roll',{value:Number(input.value)});},'primary');
@@ -122,11 +145,14 @@ function renderCard(g, p) {
     const branches=text(box,'details','','review');text(branches,'summary','Что произойдёт при успехе и неудаче');
     text(branches,'p','Успех: '+p.proposal.success.summary);text(branches,'p','Неудача: '+p.proposal.failure.summary);
     button($('pending'),'Отменить заявку',()=>command('cancel'),'quiet');
+    button($('pending'),'Поправить помощника',()=>{ $('redirect-text').value=''; openDialog('redirect-dialog'); });
   } else if(p.phase==='question' || p.phase==='error') {
     reading(p.phase==='question'?'Нужно уточнение':'Не получилось подготовить карточку',p.phase==='question'?p.proposal.question:p.error,'Состояние игры не изменилось.',true);
+    if(p.phase==='error'&&!$('action').value)$('action').value=p.action.text;
     if(p.proposal?.gm_hint) text($('pending'),'p',p.proposal.gm_hint,'gm-note');
     const controls=text($('pending'),'div','','pending-controls');
     button(controls,'Вернуться к заявке',()=>command('cancel'),'primary');
+    button(controls,'Поправить помощника',()=>{ $('redirect-text').value=''; openDialog('redirect-dialog'); });
     if(p.phase==='error')button(controls,'Повторить запрос',()=>command('retry'));
   } else {
     reading('Готовим продолжение',p.action.text,'Можно обсудить намерение с игроком. Результат появится здесь.',true);
@@ -138,9 +164,9 @@ function renderHeroes(g, p) {
   if(!heroes.some(e=>e.id===viewedHero))viewedHero=selectedHero;
   $('hero-tabs').replaceChildren();
   for(const hero of heroes) {
-    const tab=button($('hero-tabs'),hero.name,()=>{
+    const tab=button($('hero-tabs'),(hero.status==='dead'?'† ':'')+hero.name,()=>{
       viewedHero=hero.id;
-      if(!state.game.pending)selectedHero=hero.id;
+      if(!state.game.pending && hero.status!=='dead')selectedHero=hero.id;
       render(true);
     });
     tab.id='tab-'+hero.id;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','world');
@@ -149,26 +175,41 @@ function renderHeroes(g, p) {
   }
   const hero=g.entities[viewedHero], place=g.entities[hero.location];
   $('world').replaceChildren();$('world').setAttribute('aria-labelledby','tab-'+hero.id);
-  const heading=text($('world'),'div','','hero-name');text(heading,'strong',hero.name);text(heading,'span',`${hero.hp}/${hero.max_hp} здоровья`,'hp');
+  const heading=text($('world'),'div','','hero-name');text(heading,'strong',hero.name);text(heading,'span',hero.status==='dead'?'погиб':`${hero.hp}/${hero.max_hp} здоровья`,'hp');
   text($('world'),'p',hero.description,'hero-description');text($('world'),'p','Сейчас: '+place.name);
   const items=Object.values(g.entities).filter(e=>e.kind==='item'&&e.location===hero.id).map(e=>e.name);
   text($('world'),'p','При себе: '+(items.join(', ')||'ничего'));
   const npcs=Object.values(g.entities).filter(e=>e.kind==='npc'&&e.location===hero.location).map(e=>e.name);
   if(npcs.length)text($('world'),'p','Рядом: '+npcs.join(', '));
-  const exits=g.connections.filter(e=>e.includes(hero.location)).map(e=>e.find(id=>id!==hero.location));
-  if(exits.length && !p) {
+  const surroundings=Object.values(g.entities).filter(e=>['item','feature'].includes(e.kind)&&e.location===hero.location).map(e=>e.name);
+  if(surroundings.length)text($('world'),'p','Здесь: '+surroundings.join(', '));
+  const available=state.routes?.[hero.id];
+  let exits;
+  if(available) exits=Object.entries(available).sort((a,b)=>a[1].length-b[1].length).map(([id])=>id);
+  else {
+    const distances=new Map([[hero.location,0]]), queue=[hero.location];
+    for(const current of queue) for(const edge of g.connections.filter(e=>e.includes(current))) {
+      const next=edge.find(id=>id!==current);if(!distances.has(next)){distances.set(next,distances.get(current)+1);queue.push(next);}
+    }
+    exits=[...distances].filter(([id])=>id!==hero.location).sort((a,b)=>a[1]-b[1]).map(([id])=>id);
+  }
+  if(exits.length && (!p||p.phase==='error')) {
     text($('world'),'h3','Куда может пойти '+hero.name);
     const routes=text($('world'),'div','','routes');
     for(const id of exits) {
-      const b=button(routes,g.entities[id].name,()=>{selectedHero=hero.id;command('travel',{actor:hero.id,destination:id});},'route');
-      b.setAttribute('aria-label',`${hero.name}: перейти — ${g.entities[id].name}`);text(b,'small','→');b.disabled=sending||!!p||state.busy;
+      const b=button(routes,g.entities[id].name,()=>{selectedHero=hero.id;selectedParticipants.clear();command('travel',{actor:hero.id,destination:id});},'route');
+      b.setAttribute('aria-label',`${hero.name}: перейти — ${g.entities[id].name}`);text(b,'small','→');b.disabled=sending||(!!p&&p.phase!=='error')||state.busy||hero.status==='dead'||g.session?.status==='finished';
     }
-    text($('world'),'p','Выберите место, затем подтвердите переход в основной карточке. Идёт только этот герой.','route-note');
+    text($('world'),'p','Выберите конечное место: весь известный безопасный маршрут попадёт в одну карточку. Идёт только этот герой.','route-note');
   }
 }
 function renderFacts(g) {
-  $('facts').replaceChildren();$('secret-facts').replaceChildren();
-  const labels={fact:'',claim:'Заявление',rumor:'Слух',promise:'Обещание'};
+  $('facts').replaceChildren();$('secret-facts').replaceChildren();$('threads').replaceChildren();
+  const pressureLabels=['обычные последствия','появился знак','осложнение','приговор'];
+  for(const thread of Object.values(g.threads||{})){
+    const row=text($('threads'),'div','','fact');text(row,'span',thread.resolved?'разрешено':pressureLabels[thread.pressure]||'открыто','tag');text(row,'p',thread.title);text(row,'p',thread.outcome||thread.stakes,'muted');
+  }
+  const labels={fact:'',claim:'Заявление',rumor:'Слух',promise:'Обещание',task:'Задача'};
   let privateCount=0,publicCount=0;
   for(const f of Object.values(g.facts)) {
     const privateFact=f.visibility==='gm';if(privateFact)privateCount++;else publicCount++;
@@ -196,8 +237,8 @@ function renderLore(g) {
 function render(force=false) {
   if(!state)return;
   const signature=JSON.stringify(state);if(!force&&signature===lastView)return;lastView=signature;
-  const g=state.game,p=g?.pending;
-  if(g?.id!==gameId){gameId=g?.id;selectedHero='';viewedHero='';requestMode='action';renderLore(g);}
+  const g=state.game,p=g?.pending,blocked=!!p&&p.phase!=='error';
+  if(g?.id!==gameId){gameId=g?.id;selectedHero='';viewedHero='';requestMode='action';selectedParticipants.clear();renderLore(g);}
   $('welcome').hidden=!!g;$('table').hidden=!g;$('open-lore').hidden=!g;
   $('new').disabled=$('start-example').disabled=sending||!!p||state.busy;
   $('undo').disabled=sending||!!p||!g?.events.length;
@@ -210,30 +251,41 @@ function render(force=false) {
   $('usage').textContent=`Запросов: ${g?.calls.length||0} · платный API не используется`;
   $('calls').replaceChildren();for(const c of (g?.calls||[]).slice(-15).reverse())text($('calls'),'div',`${c.stage}: ${c.status} · ${c.seconds??'?'} с · ${c.usage?.input_tokens??'?'} / ${c.usage?.output_tokens??'?'} токенов`,'call');
   if(!g)return;
-  const heroes=Object.values(g.entities).filter(e=>e.kind==='hero');
-  if(!heroes.some(h=>h.id===selectedHero))selectedHero=heroes[0].id;
-  if(p)selectedHero=p.action.actor;
+  const allHeroes=Object.values(g.entities).filter(e=>e.kind==='hero');
+  const heroes=allHeroes.filter(e=>e.status!=='dead');
+  if(!allHeroes.some(h=>h.id===selectedHero)||(!p&&heroes.length&&!heroes.some(h=>h.id===selectedHero)))selectedHero=(heroes[0]||allHeroes[0]).id;
+  if(p&&p.phase!=='error')selectedHero=p.action.actor;
   $('session-title').textContent=g.document?.title||'Вода для деревни';
   $('actor').replaceChildren();for(const hero of heroes){const o=text($('actor'),'option',hero.name);o.value=hero.id;}
-  $('actor').value=selectedHero;$('actor').disabled=sending||!!p;
-  $('action-form').hidden=!!p;
-  $('manual-note').closest('details').hidden=!!p;
-  $('save-note').disabled=sending||!!p||state.busy;
-  $('send').disabled=sending||!!p||state.busy||!connected;
-  $('ask-hint').disabled=$('back-action').disabled=sending||!!p;
-  $('ask-hint').hidden=requestMode==='hint';$('back-action').hidden=requestMode!=='hint';
-  $('action-title').textContent=requestMode==='hint'?'О чём подсказать вам?':'Что делает игрок?';
-  $('send').textContent=requestMode==='hint'?'Спросить помощника':'Разобрать действие';
+  $('actor').value=selectedHero;$('actor').disabled=sending||blocked;
+  const finished=g.session?.status==='finished';
+  $('action-form').hidden=blocked||finished;
+  $('manual-note').closest('details').hidden=blocked||finished;
+  $('save-note').disabled=sending||blocked||state.busy;
+  $('send').disabled=sending||blocked||state.busy||!connected;
+  $('ask-hint').disabled=$('direct-model').disabled=$('back-action').disabled=sending||blocked;
+  $('ask-hint').hidden=requestMode==='hint';$('direct-model').hidden=requestMode==='direction';$('back-action').hidden=requestMode==='action';
+  $('action-title').textContent=requestMode==='hint'?'О чём подсказать вам?':requestMode==='direction'?'Что помощник должен учесть?':'Что делают игроки?';
+  $('send').textContent=requestMode==='hint'?'Спросить помощника':requestMode==='direction'?'Сохранить указание':'Разобрать действие';
   $('action-form').classList.toggle('hint-mode',requestMode==='hint');
-  $('mode-note').textContent=requestMode==='hint'?'Совет только для вас. Герои, вещи и здоровье останутся на месте.':`Заявка за ${g.entities[selectedHero].name}. Для другого героя выберите его имя.`;
-  $('action').placeholder=requestMode==='hint'?'Например: игроки растерялись. Какие два подхода им предложить?':`Например: ${g.entities[selectedHero].name} внимательно осматривает рабочий стол Ады.`;
-  $('next').textContent=p?'Сначала завершите карточку выше.':!connected?'Подключите помощника в настройках.':'';
+  const nearby=heroes.filter(h=>h.id!==selectedHero&&h.location===g.entities[selectedHero].location);
+  selectedParticipants=new Set([...selectedParticipants].filter(id=>nearby.some(h=>h.id===id)));
+  $('participants').replaceChildren();
+  for(const hero of nearby){const label=text($('participants'),'label','','participant');const input=document.createElement('input');input.type='checkbox';input.value=hero.id;input.checked=selectedParticipants.has(hero.id);input.disabled=sending||blocked;input.onchange=()=>input.checked?selectedParticipants.add(hero.id):selectedParticipants.delete(hero.id);label.prepend(input);text(label,'span',hero.name);}
+  if(!nearby.length)text($('participants'),'span','Рядом нет другого активного героя.','muted');
+  $('participants-control').hidden=requestMode!=='action';
+  $('mode-note').textContent=requestMode==='hint'?'Совет только для вас. Герои, вещи и здоровье останутся на месте.':requestMode==='direction'?'Это не действие героя. Указание будет обязательным для следующей карточки.':`Заявка за ${g.entities[selectedHero].name}. Для другого героя выберите его имя.`;
+  $('action').placeholder=requestMode==='hint'?'Например: игроки растерялись. Какие два подхода им предложить?':requestMode==='direction'?'Например: покажи существующую зацепку, но не раскрывай её содержание.':`Например: ${g.entities[selectedHero].name} внимательно осматривает рабочий стол Ады.`;
+  $('director-note').replaceChildren();$('director-note').hidden=!g.director_note;
+  if(g.director_note){text($('director-note'),'strong','Указание для следующей карточки');text($('director-note'),'p',g.director_note);button($('director-note'),'Убрать',()=>command('direct',{text:''}),'quiet');}
+  $('next').textContent=finished?'История завершена.':blocked?'Сначала завершите карточку выше.':p?.phase==='error'?'Можно исправить заявку ниже или выбрать локальный переход.':!connected?'Подключите помощника в настройках.':'';
   const hero=g.entities[selectedHero],place=g.entities[hero.location];
   $('scene').replaceChildren();text($('scene'),'span',place.name);text($('scene'),'span',hero.name);
   renderCard(g,p);renderHeroes(g,p);renderFacts(g);
   $('event-count').textContent=`(${g.events.length})`;$('history').replaceChildren();
   for(const e of [...g.events].reverse()){
-    const row=text($('history'),'div','','entry');text(row,'p',(e.action.mode==='hint'?'Вопрос ведущего':g.entities[e.action.actor]?.name||e.action.actor)+': '+e.action.text,'actor');
+    const actors=(e.action.participants?.length?e.action.participants:[e.action.actor]).map(id=>g.entities[id]?.name||id);
+    const row=text($('history'),'div','','entry');text(row,'p',(e.action.mode==='hint'?'Вопрос ведущего':actors.join(' + '))+': '+e.action.text,'actor');
     text(row,'p',e.text||e.summary);if(e.text)text(row,'p',e.summary,'muted');
     if(e.roll)text(row,'p',`Кубик ${e.roll.value} + ${e.roll.bonus}; нужно ${e.roll.dc}.`,'roll');
   }
@@ -242,7 +294,8 @@ function openEditor() {
   const p=state.game.pending;editId=p.id;
   $('edit-text').value=p.text;$('edit-summary').value=p.outcome.summary;$('edit-effects').replaceChildren();$('edit-error').hidden=true;
   const names={...state.game.entities};for(const op of p.outcome.operations)if(op.op==='create')names[op.entity.id]=op.entity;
-  p.outcome.operations.forEach((op,i)=>{const row=text($('edit-effects'),'label','','effect');const input=document.createElement('input');input.type='checkbox';input.checked=true;input.value=i;row.append(input);text(row,'span',describeOperation(op,names));});
+  const protectedEffects=new Set(p.protected_operations||[]);
+  p.outcome.operations.forEach((op,i)=>{const row=text($('edit-effects'),'label','','effect');const input=document.createElement('input');input.type='checkbox';input.checked=true;input.value=i;input.disabled=protectedEffects.size>0;row.append(input);text(row,'span',describeOperation(op,names)+(protectedEffects.has(i)?' · обязательно':protectedEffects.size?' · связано с обязательным последствием':''));});
   if(!p.outcome.operations.length)text($('edit-effects'),'p','Изменений состояния нет.');
   openDialog('edit-dialog');
 }
@@ -265,10 +318,12 @@ $('login').onclick=async()=>{$('login').disabled=true;try{const r=await api('cod
 function start(){if(!state?.game||confirm('Начать историю с самого начала? Текущая партия будет заменена.'))command('new');}
 $('start-example').onclick=$('new').onclick=start;
 $('undo').onclick=()=>command('undo');
-$('actor').onchange=()=>{selectedHero=$('actor').value;viewedHero=selectedHero;render(true);};
+$('actor').onchange=()=>{selectedHero=$('actor').value;viewedHero=selectedHero;selectedParticipants.clear();render(true);};
 $('ask-hint').onclick=()=>{requestMode='hint';render(true);$('action').focus();};
+$('direct-model').onclick=()=>{requestMode='direction';render(true);$('action').focus();};
 $('back-action').onclick=()=>{requestMode='action';render(true);$('action').focus();};
-$('action-form').onsubmit=e=>{e.preventDefault();command('submit',{actor:selectedHero,mode:requestMode,text:$('action').value});};
+$('action-form').onsubmit=e=>{e.preventDefault();if(requestMode==='direction')command('direct',{text:$('action').value});else command('submit',{actor:selectedHero,participants:[selectedHero,...selectedParticipants],mode:requestMode,text:$('action').value});};
+$('save-redirect').onclick=async()=>{if(await command('redirect',{text:$('redirect-text').value}))$('redirect-dialog').close();};
 $('world-model').onchange=async()=>{if(sending)return;sending=true;try{state=await api('world/model',{model:$('world-model').value});}catch(e){error(e);}finally{sending=false;render(true);}};
 function download(name,content,type='application/json'){const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 $('document-text').oninput=()=>{validatedText=null;$('import-document').hidden=true;};

@@ -3,6 +3,7 @@
 import socket
 import re
 import json
+import shutil
 import tempfile
 import threading
 import time
@@ -11,7 +12,7 @@ from pathlib import Path
 import uvicorn
 from playwright.sync_api import sync_playwright, expect
 
-from dnd_helper.free_world import Advice
+from dnd_helper.free_world import DirectorCard
 from dnd_helper.web import create_app
 
 
@@ -23,47 +24,58 @@ class Stub:
         pass
 
     def structured(self, instruction, payload, schema, cancel, model=""):
-        if schema is Advice:
+        if schema is DirectorCard:
             hint = payload["action"].get("mode") == "hint"
             actor = payload["action"]["actor"]
             risky = "колодец" in payload["action"]["text"]
-            value = Advice.model_validate(
+            directed = payload.get("director_note", "")
+            value = DirectorCard.model_validate(
                 dict(
-                    summary="Нужна проверка ловкости" if risky else "Мира берёт ведро и обещает вернуться.",
+                    summary="Нужна проверка ловкости" if risky else "Указание ведущего учтено" if directed else "Мира берёт ведро и обещает вернуться.",
                     gm_hint="Предложите игроку описать намерение. Не решайте за него.",
+                    intent={"kind": "other", "goal": "Разрешить заявку", "targets": []},
+                    stop="advice" if hint else "check" if risky else "completed",
+                    progress="meaningful",
                     evidence=["water"],
                     question=None,
                     speaker=None,
-                    check={"stat": "agility", "difficulty": "standard"} if risky else None,
+                    check={"stat": "agility", "difficulty": "standard"} if risky and not hint else None,
                     success={
-                        "read_aloud": "Ада придерживает ведро, пока Мира перехватывает ручку поудобнее. «Спасибо. Хоть знать буду, что я тут не одна с этой бедой», — говорит она и отступает от колодца, освобождая дорогу.",
-                        "summary": "Переход завершён" if risky else "Ведро у Миры; обещание записано.",
-                        "operations": []
+                        "read_aloud": "У колодца особенно заметно пустое ведро — именно так, как указал ведущий."
+                        if directed
+                        else "Ада придерживает ведро, пока Мира перехватывает ручку поудобнее. «Спасибо. Хоть знать буду, что я тут не одна с этой бедой», — говорит она и отступает от колодца, освобождая дорогу.",
+                        "summary": "Переход завершён" if risky else "Ведро выведено в сцену" if directed else "Ведро у Миры; обещание записано.",
+                        "effects": []
                         if risky or hint
+                        else [{"effect": "present", "entity": "bucket"}]
+                        if directed
                         else [
-                            {"op": "transfer", "item": "bucket", "before": "square", "destination": actor},
+                            {"effect": "transfer", "item": "bucket", "destination": actor},
                             {
-                                "op": "remember",
-                                "id": "promise",
+                                "effect": "remember",
                                 "text": "Мира обещала вернуться.",
                                 "status": "promise",
                                 "visibility": "public",
                                 "known_by": ["ada", actor],
+                                "subjects": ["ada", "bucket"],
                             },
                         ],
                     },
                     failure={
                         "read_aloud": "Герой ушибся, но может продолжать.",
                         "summary": "Мира ушиблась: −2 HP.",
-                        "operations": [{"op": "damage", "entity": actor}],
+                        "effects": [{"effect": "harm", "entity": actor}],
                     }
-                    if risky
+                    if risky and not hint
                     else None,
                 )
             )
         else:
             raise AssertionError("Only one assistant call is expected")
-        return value, {"seconds": 0.1, "usage": {"input_tokens": 10, "output_tokens": 10}}
+        return value, {
+            "seconds": 0.1,
+            "usage": {"input_tokens": 10, "output_tokens": 10},
+        }
 
 
 def main():
@@ -82,7 +94,9 @@ def main():
                 assert time.monotonic() < deadline
                 time.sleep(0.05)
             with sync_playwright() as p:
-                browser = p.chromium.launch()
+                browser = p.chromium.launch(
+                    executable_path=shutil.which("google-chrome") or shutil.which("chromium")
+                )
                 page = browser.new_page(viewport={"width": 1366, "height": 900})
                 errors = []
                 page.on("pageerror", lambda e: errors.append(str(e)))
@@ -109,6 +123,8 @@ def main():
                 expect(page.locator("#lore-content")).to_contain_text("Берёзовый Брод")
                 expect(page.locator("#lore-content")).to_contain_text("ветка заклинила")
                 page.get_by_label("Закрыть описание мира").click()
+                expect(page.locator("#participants")).to_contain_text("Торвин")
+                page.locator('#participants input[value="torvin"]').check()
                 Path("/tmp/dnd-world-browser").mkdir(exist_ok=True)
                 page.screenshot(path="/tmp/dnd-world-browser/initial.png", full_page=True)
                 page.locator("#action").fill("Беру ведро и обещаю вернуться.")
@@ -121,6 +137,7 @@ def main():
                 page.screenshot(path="/tmp/dnd-world-browser/card.png", full_page=True)
                 page.reload()
                 page.get_by_role("button", name="Применить и продолжить").click()
+                expect(page.locator("#history")).to_contain_text("Мира + Торвин")
                 expect(page.locator("#facts")).to_contain_text("Мира обещала вернуться.")
                 expect(page.locator("#world")).to_contain_text("Перевязь, Ведро")
                 page.locator("#action").fill("Спускаюсь в колодец.")
@@ -178,9 +195,24 @@ def main():
                 expect(page.locator("#pending")).to_contain_text("Ада ждёт вашего решения.")
                 page.get_by_role("button", name="Понятно · закрыть совет").click()
                 expect(page.locator("#history")).to_contain_text("Вопрос ведущего")
-                expect(page.locator("#action-title")).to_have_text("Что делает игрок?")
+                expect(page.locator("#action-title")).to_have_text("Что делают игроки?")
                 expect(page.locator("#send")).to_have_text("Разобрать действие")
                 assert app.state.service.free_world.store.read()["entities"]["torvin"]["location"] == "square"
+                page.locator("#direct-model").click()
+                expect(page.locator("#mode-note")).to_contain_text("обязательным")
+                page.locator("#action").fill("Покажи существующее ведро, но ничего не придумывай внутри него.")
+                page.locator("#send").click()
+                expect(page.locator("#director-note")).to_contain_text("Покажи существующее ведро")
+                page.locator("#action").fill("Торвин осматривается у колодца.")
+                page.locator("#send").click()
+                expect(page.locator("#reading")).to_contain_text("пустое ведро")
+                expect(page.locator("#review-effects")).to_contain_text("Выведено в сцену")
+                page.get_by_role("button", name="Поправить помощника").click()
+                page.locator("#redirect-text").fill("Сделай упоминание ведра коротким и явным.")
+                page.get_by_role("button", name="Пересобрать карточку").click()
+                expect(page.locator("#reading")).to_contain_text("пустое ведро")
+                page.get_by_role("button", name="Применить и продолжить").click()
+                expect(page.locator("#director-note")).to_be_hidden()
                 page.locator("#open-settings").click()
                 page.locator("#documents > summary").click()
                 with page.expect_download() as download_info:
@@ -189,11 +221,12 @@ def main():
                 download_info.value.save_as(journal_path)
                 journal = json.loads(journal_path.read_text("utf-8"))
                 assert journal["format"] == "dnd-world-log@1"
+                assert len(journal["events"]) == 2
                 assert journal["events"][0]["edited"]
                 page.locator("#document-file").set_input_files(journal_path)
                 expect(page.locator("#document-text")).to_have_value(re.compile("dnd-world-log@1"))
                 page.locator("#validate-document").click()
-                expect(page.locator("#document-report")).to_contain_text("Записей журнала: 1")
+                expect(page.locator("#document-report")).to_contain_text("Записей журнала: 2")
                 page.locator("#import-document").click()
                 expect(page.locator("#history")).to_contain_text("Ада ждёт вашего решения.")
                 Path("/tmp/dnd-world-browser").mkdir(exist_ok=True)

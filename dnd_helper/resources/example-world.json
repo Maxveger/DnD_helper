@@ -12,7 +12,7 @@
     "Без жестокости. Бой необязателен; герои вправе отказаться от помощи."
   ],
   "rules": {
-    "engine": "hybrid-simple@1",
+    "engine": "intent-simple",
     "manual_rules": []
   },
   "entities": [
@@ -48,6 +48,30 @@
       "hp": null,
       "max_hp": null,
       "stats": null
+    },
+    {
+      "id": "water_intake",
+      "kind": "location",
+      "name": "Лесной водозабор",
+      "description": "Низкое каменное сооружение у ручья. Вода должна проходить через деревянный затвор в трубу, ведущую к деревне.",
+      "location": null,
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null
+    },
+    {
+      "id": "sluice",
+      "kind": "feature",
+      "name": "Затвор водозабора",
+      "description": "Деревянный затвор регулирует подачу воды в трубу к деревне.",
+      "location": "water_intake",
+      "goal": "Пропускать воду к деревенскому колодцу.",
+      "hp": null,
+      "max_hp": null,
+      "stats": null,
+      "state": "jammed",
+      "states": ["jammed", "clear"]
     },
     {
       "id": "ada",
@@ -121,7 +145,20 @@
         "strength": 2,
         "agility": 0,
         "mind": 1
-      }
+      },
+      "capabilities": ["force", "repair"]
+    },
+    {
+      "id": "pry_bar",
+      "kind": "item",
+      "name": "Монтажный рычаг",
+      "description": "Короткий прочный рычаг с плоским концом — им удобно отжимать заклинившие детали.",
+      "location": "workshop",
+      "goal": "",
+      "hp": null,
+      "max_hp": null,
+      "stats": null,
+      "capabilities": ["leverage"]
     }
   ],
   "facts": [
@@ -135,7 +172,8 @@
         "ada",
         "torvin"
       ],
-      "resolved": false
+      "resolved": false,
+      "subjects": ["square", "water_intake"]
     },
     {
       "id": "help",
@@ -147,7 +185,8 @@
         "ada",
         "torvin"
       ],
-      "resolved": false
+      "resolved": false,
+      "subjects": ["ada", "square"]
     },
     {
       "id": "water_truth",
@@ -155,7 +194,8 @@
       "status": "fact",
       "visibility": "gm",
       "known_by": [],
-      "resolved": false
+      "resolved": false,
+      "subjects": ["sluice", "water_intake"]
     }
   ],
   "connections": [
@@ -166,6 +206,129 @@
     [
       "square",
       "forest"
+    ],
+    [
+      "forest",
+      "water_intake"
     ]
-  ]
+  ],
+  "discoveries": [
+    {
+      "id": "inspect_sluice",
+      "fact": "water_truth",
+      "at": "sluice"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "clear_sluice",
+      "entity": "sluice",
+      "before": "jammed",
+      "after": "clear",
+      "methods": [
+        {
+          "capability": "leverage",
+          "check": {"stat": "strength", "difficulty": "easy"}
+        },
+        {
+          "capability": "force",
+          "check": {"stat": "strength", "difficulty": "standard"}
+        },
+        {
+          "capability": "repair",
+          "check": null
+        }
+      ]
+    }
+  ],
+  "reactions": [],
+  "endings": [
+    {
+      "id": "water_restored",
+      "when": [
+        {
+          "source": "entity",
+          "id": "sluice",
+          "field": "state",
+          "value": "clear"
+        }
+      ],
+      "priority": 50,
+      "ending": "victory",
+      "pressure_thread": "village_water",
+      "resolve_facts": [],
+      "resolve_threads": ["village_water"],
+      "summary": "Затвор освобождён, вода возвращается в деревню.",
+      "read_aloud": "Затвор поддаётся, и вода вновь устремляется по каналу к деревне. К вечеру колодец наполнится — на этом ваше короткое приключение заканчивается."
+    }
+  ],
+  "routes": [],
+  "scenes": [
+    {
+      "id": "square_scene",
+      "at": "square",
+      "goal": "Дать героям выбрать, как помочь деревне с водой или осознанно отказаться.",
+      "obstacle": null,
+      "transitions": [],
+      "opportunities": [
+        {
+          "id": "empty_bucket_cue",
+          "title": "Пустое ведро позволяет взять запас воды или проверить колодец.",
+          "cue": "У края колодца особенно заметно пустое ведро с сухой верёвочной ручкой.",
+          "subjects": ["bucket"],
+          "supports": [],
+          "priority": 20
+        }
+      ]
+    },
+    {
+      "id": "workshop_scene",
+      "at": "workshop",
+      "goal": "Позволить героям подготовить подходящий инструмент, если они ищут практический способ ремонта.",
+      "obstacle": null,
+      "transitions": [],
+      "opportunities": [
+        {
+          "id": "pry_bar_cue",
+          "title": "Ломик может дать рычаг при ремонте механизма.",
+          "cue": "Под верстаком лежит короткий ломик с потёртой рукоятью — инструмент явно рассчитан на упрямое железо.",
+          "subjects": ["pry_bar"],
+          "supports": [],
+          "priority": 30
+        }
+      ]
+    },
+    {
+      "id": "intake_scene",
+      "at": "water_intake",
+      "goal": "Найти причину остановки воды и восстановить затвор любым разумным способом.",
+      "obstacle": "sluice",
+      "transitions": ["clear_sluice"],
+      "opportunities": [
+        {
+          "id": "jammed_sluice_cue",
+          "title": "Заклинивший затвор можно исследовать и освободить инструментом, ремонтом или силой.",
+          "cue": "В зазоре затвора торчит свежая сломанная ветка, а на направляющих видны следы сильного перекоса.",
+          "subjects": ["sluice"],
+          "supports": ["clear_sluice"],
+          "priority": 50
+        }
+      ]
+    }
+  ],
+  "threads": [
+    {
+      "id": "village_water",
+      "title": "Вода для деревни",
+      "stakes": "К вечеру людям и животным понадобится вода. Промедление вызывает сначала тревогу, затем бытовой кризис, но любой реальный способ обеспечить деревню водой считается прогрессом.",
+      "subjects": ["square", "ada", "water_intake", "sluice"],
+      "pressure": 0,
+      "resolved": false,
+      "outcome": ""
+    }
+  ],
+  "guardian": {
+    "name": "Хранитель Брода",
+    "description": "Старое поверье называет так сам порядок деревни: он отвечает знаками и последствиями, когда общая беда остаётся без внимания, но не требует единственного решения."
+  }
 }

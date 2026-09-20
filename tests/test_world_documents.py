@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dnd_helper.engine import uid
-from dnd_helper.free_world import FreeWorld, Advice
+from dnd_helper.free_world import FreeWorld, DirectorCard
 from dnd_helper.rules import GameError
 from dnd_helper.web import create_app
 from dnd_helper.world_documents import (
@@ -48,10 +48,13 @@ def test_custom_scenario_and_second_hero_enter_one_call_with_canon(tmp_path):
     command(w, "import", text=json.dumps(doc))
     s = command(w, "submit", actor="torvin", text="Игрок хочет поднять завал.")
     assert s["pending"]["phase"] == "check"
-    assert len(p.inputs) == 1 and p.inputs[0][0] is Advice
+    assert len(p.inputs) == 1 and p.inputs[0][0] is DirectorCard
     payload = p.inputs[0][1]
     assert payload["scenario"]["title"] == doc["title"]
-    assert payload["facts"]["culprit"]["visibility"] == "gm"
+    # A remote secret and the full document are absent from this independent turn folder.
+    assert "culprit" not in payload["known_facts"]
+    assert "session_document" not in payload
+    assert "gm_notes" not in payload["scenario"]
     assert payload["action"]["actor"] == "torvin"
     s = command(w, "roll", value=11)
     assert s["pending"]["phase"] == "ready"
@@ -74,6 +77,7 @@ def test_advice_is_not_world_memory_and_cannot_change_inventory(tmp_path):
     assert s["entities"]["bucket"]["location"] == "square"
     command(w, "cancel")
     p.plan = proposal()
+    p.plan.stop = "advice"
     command(w, "submit", mode="hint", text="Подскажи темп сцены.")
     command(w, "accept")
     command(w, "submit", text="Игрок осматривает площадь.")
@@ -135,9 +139,12 @@ def test_manual_notes_export_restore_undo_and_memory_after_forty_events(tmp_path
     s = command(w, "undo")
     assert len(s["events"]) == 39 and len(s["facts"]) == len(original["facts"]) - 1
     command(w, "submit", actor="torvin", text="Что ведущему помнить?")
-    assert any(f["text"].endswith("заметка 0.") for f in p.inputs[-1][1]["facts"].values())
-    assert len(p.inputs[-1][1]["recent_events"]) == 6
-    assert p.inputs[-1][1]["scenario"]["boundaries"] == custom_document()["boundaries"]
+    assert any(
+        item.get("memory", "").endswith("заметка 0.")
+        for item in p.inputs[-1][1]["private_constraints"]
+    )
+    assert len(p.inputs[-1][1]["recent_events"]) == 2
+    assert [item["boundary"] for item in p.inputs[-1][1]["private_constraints"] if "boundary" in item] == custom_document()["boundaries"]
 
 
 def test_journal_replay_rejects_duplicate_events_and_impossible_inventory(tmp_path):
@@ -189,6 +196,31 @@ def test_author_kit_json_fences_duplicate_keys_and_legacy_guidance():
     assert "прежнего режима" in validation_report('{"format":"dnd-adventure@1"}')["repair_prompt"]
 
 
+def test_scene_contract_rejects_single_path_and_remote_opportunity():
+    document = deepcopy(author_kit()["example"])
+    transition = next(item for item in document["transitions"] if item["id"] == "clear_sluice")
+    transition["methods"] = transition["methods"][:1]
+    report = validation_report(json.dumps(document, ensure_ascii=False))
+    assert not report["ok"] and "хотя бы два" in report["repair_prompt"]
+
+    document = deepcopy(author_kit()["example"])
+    scene = next(item for item in document["scenes"] if item["id"] == "intake_scene")
+    scene["opportunities"][0]["subjects"] = ["bucket"]
+    report = validation_report(json.dumps(document, ensure_ascii=False))
+    assert not report["ok"] and "физически" in report["repair_prompt"]
+
+
+def test_world_rejects_decorative_states_that_no_rule_can_change():
+    document = default_document()
+    bucket = next(entity for entity in document["entities"] if entity["id"] == "bucket")
+    bucket.update(state="closed", states=["closed", "read"])
+
+    report = validation_report(json.dumps(document, ensure_ascii=False))
+
+    assert not report["ok"]
+    assert "ни transition, ни reaction" in report["repair_prompt"]
+
+
 def test_export_does_not_include_pending_and_cannot_silently_lose_state(tmp_path):
     w = FreeWorld(tmp_path, FakeProvider())
     command(w, "new")
@@ -226,7 +258,7 @@ def test_import_export_endpoints_are_protected_and_leave_prepared_game_unchanged
         assert app.state.service.store.read() == before
 
 
-def test_known_travel_is_local_confirmed_and_rejects_teleport(tmp_path):
+def test_known_travel_is_local_confirmed_across_complete_route(tmp_path):
     provider = FakeProvider()
     w = FreeWorld(tmp_path, provider)
     command(w, "new")
@@ -236,8 +268,12 @@ def test_known_travel_is_local_confirmed_and_rejects_teleport(tmp_path):
     assert not provider.inputs
     s = command(w, "accept")
     assert s["entities"]["mira"]["location"] == "forest"
-    with pytest.raises(GameError, match="перехода"):
-        command(w, "travel", actor="mira", destination="workshop")
+    s = command(w, "travel", actor="mira", destination="workshop")
+    assert s["pending"]["outcome"]["operations"] == [
+        {"op": "move_path", "entity": "mira", "route": ["forest", "square", "workshop"]}
+    ]
+    s = command(w, "accept")
+    assert s["entities"]["mira"]["location"] == "workshop"
     assert not provider.inputs
     journal = export_journal(w.store.read())
     assert load_document(json.dumps(journal))["entities"] == s["entities"]

@@ -31,7 +31,9 @@ def main():
 
         class RecordingProvider(CodexProvider):
             def structured(self, instruction, payload, schema_class, cancel, model=""):
-                result, usage = super().structured(instruction, payload, schema_class, cancel, model)
+                result, usage = super().structured(
+                    instruction, payload, schema_class, cancel, model
+                )
                 responses.append(
                     {"schema": schema_class.__name__, "response": result.model_dump(), "metrics": usage}
                 )
