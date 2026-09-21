@@ -26,14 +26,22 @@ if "login" in args:
  print("Logged in using " + ("API key: secret-marker" if mode=="api" else "ChatGPT"));sys.exit()
 prompt=sys.stdin.read()
 assert prompt and args[-1]=="-"
-assert "--ignore-user-config" in args and "--ephemeral" in args
-assert "resume" not in args
+assert "--ignore-user-config" in args
+if mode.startswith("session"):
+ assert "--ephemeral" not in args
+ if mode=="session": assert "--output-schema" not in args
+ if mode=="session_schema": assert "--output-schema" in args
+ if "resume" in args: assert "11111111-1111-1111-1111-111111111111" in args
+else:
+ assert "--ephemeral" in args
+ assert "resume" not in args
 assert any(arg.startswith("model_instructions_file=") for arg in args)
 role_arg=next(arg for arg in args if arg.startswith("model_instructions_file="))
 role=open(json.loads(role_arg.split("=",1)[1]),encoding="utf-8").read()
 assert "Do not invoke tools" in role
 assert "CODEX_API_KEY" not in os.environ and "OPENAI_API_KEY" not in os.environ
-assert json.loads(open(args[args.index("--output-schema")+1]).read())["additionalProperties"] is False
+if "--output-schema" in args:
+ assert json.loads(open(args[args.index("--output-schema")+1]).read())["additionalProperties"] is False
 if mode=="timeout":time.sleep(30)
 if mode=="limit":
  print("usage limit secret-marker",file=sys.stderr);sys.exit(1)
@@ -63,6 +71,32 @@ def test_codex_stdin_schema_usage_no_api_and_no_shell(provider, tmp_path, monkey
     assert "session_id" not in usage
     assert not (tmp_path / "injected").exists()
     assert provider.status()["ready"]
+
+
+def test_codex_conversation_persists_and_resumes_without_resending_schema(provider, monkeypatch):
+    monkeypatch.setenv("DND_TEST_MODE", "session")
+    text, first = provider.conversation("Первый ход", threading.Event())
+    assert Reply.model_validate_json(text).text == "Привет"
+    assert first["session_id"] == "11111111-1111-1111-1111-111111111111"
+
+    text, second = provider.conversation(
+        "Следующий ход",
+        threading.Event(),
+        session_id=first["session_id"],
+    )
+    assert Reply.model_validate_json(text).text == "Привет"
+    assert second["session_id"] == first["session_id"]
+
+
+def test_codex_conversation_can_enforce_schema_for_bootstrap_or_explicit_retry(provider, monkeypatch):
+    monkeypatch.setenv("DND_TEST_MODE", "session_schema")
+    text, details = provider.conversation(
+        "Первый ход",
+        threading.Event(),
+        schema_class=Reply,
+    )
+    assert Reply.model_validate_json(text).text == "Привет"
+    assert details["session_id"] == "11111111-1111-1111-1111-111111111111"
 
 
 @pytest.mark.parametrize(

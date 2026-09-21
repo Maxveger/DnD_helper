@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="dnd-token" content="__CSRF__">
+  <title>Игровая IDE · Тихая таверна</title>
+  <link rel="stylesheet" href="/static/studio.css">
+  <script defer src="/static/studio.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <a href="/studio" class="brand">Тихая таверна <span>лаборатория игрового IDE</span></a>
+  <nav><a href="/world">Прежний помощник</a><button id="open-dossier" class="quiet">Досье</button><button id="open-settings" class="quiet">Настройки</button></nav>
+</header>
+<main>
+  <p id="error" class="error" role="alert" hidden></p>
+  <section id="welcome" class="welcome">
+    <p class="eyebrow">Живая модель · человек принимает решения</p>
+    <h1>Игровая IDE вместо сценарного автомата</h1>
+    <p>Этот прототип проводит только лабораторный отрезок «Сайрус → Дом → Око». Модель один раз получает режиссёрское досье и дальше живёт в одной беседе. Она свободно предлагает продолжение, а ведущий решает, что стало правдой.</p>
+    <button id="start" class="primary">Начать лабораторную сцену</button>
+    <p id="welcome-connection" class="muted"></p>
+  </section>
+
+  <div id="workspace" hidden>
+    <div class="session-heading">
+      <div><p class="eyebrow">Экспериментальный срез</p><h1 id="title"></h1></div>
+      <div class="buttons"><button id="undo" class="quiet">Отменить принятое</button><button id="restart" class="quiet">Начать заново</button></div>
+    </div>
+    <div class="layout">
+      <section class="game-column" aria-label="Игра">
+        <div id="game-stream" class="game-stream" aria-label="Игровой чат">
+          <div id="transcript" class="transcript"></div>
+          <section id="pending" class="pending" aria-live="polite" hidden></section>
+        </div>
+        <form id="action-form" class="composer">
+          <label for="action"><strong>Иво:</strong> действие или реплика героя</label>
+          <textarea id="action" rows="3" maxlength="2400" required placeholder="Например: внимательно осматривает Сайруса, пока тот отвёл взгляд"></textarea>
+          <div class="buttons"><button id="send-action" class="primary" type="submit">Передать живой модели</button><span id="action-status" class="muted"></span></div>
+        </form>
+      </section>
+
+      <aside aria-label="Рабочий стол ведущего">
+        <section class="side-card memory-card">
+          <div class="card-heading"><h2>Принятая память</h2><button id="edit-capsule" class="text-button">Редактировать</button></div>
+          <div id="capsule"></div>
+        </section>
+
+        <section class="side-card direction-card">
+          <h2>Указание модели</h2>
+          <p class="muted">Не действие героя. Одноразовая поправка к следующей игровой карточке.</p>
+          <textarea id="director-note" rows="2" maxlength="800" placeholder="Например: Сайрус должен уклониться, а не раскрыть тайну"></textarea>
+          <button id="save-direction">Сохранить указание</button>
+          <div class="model-memory">
+            <p id="model-memory-status" class="muted"></p>
+            <div class="buttons"><button id="remind-dossier" class="quiet">Напомнить досье</button><button id="reset-model" class="quiet">Новая беседа модели</button></div>
+          </div>
+        </section>
+
+        <section class="side-card private-chat">
+          <h2>Приватный чат с моделью</h2>
+          <p class="muted">Не продолжает сцену и не меняет память.</p>
+          <div id="private-history"></div>
+          <div id="private-pending" hidden></div>
+          <form id="private-form">
+            <select id="private-mode" aria-label="Режим приватного чата"><option value="advice">Совет:</option><option value="meta">Мета:</option></select>
+            <textarea id="private-input" rows="2" maxlength="2400" required placeholder="Вопрос по игре или замечание о процессе"></textarea>
+            <button id="send-private" type="submit">Спросить</button>
+          </form>
+        </section>
+
+        <details class="side-card diagnostics"><summary>Диагностика вызовов</summary><div id="calls"></div></details>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<dialog id="settings-dialog" aria-labelledby="settings-title">
+  <div class="dialog-heading"><h2 id="settings-title">Живая модель</h2><button data-close="settings-dialog" aria-label="Закрыть настройки">✕</button></div>
+  <p id="connection-status" role="status">Проверяем вход…</p>
+  <div class="buttons"><button id="check-login">Проверить вход</button><button id="login">Войти через ChatGPT</button></div>
+  <label for="model">Модель</label><select id="model"></select>
+  <p class="muted">Досье загружается при первом ходе. Затем приложение продолжает ту же локально сохранённую беседу и передаёт только новые реплики и решения ведущего; компактный формат карточки технически проверяется каждый раз. Платный API не используется.</p>
+</dialog>
+
+<dialog id="dossier-dialog" aria-labelledby="dossier-title">
+  <div class="dialog-heading"><h2 id="dossier-title">Режиссёрское досье</h2><button data-close="dossier-dialog" aria-label="Закрыть досье">✕</button></div>
+  <div id="dossier-content"></div>
+</dialog>
+
+<dialog id="capsule-dialog" aria-labelledby="capsule-title">
+  <div class="dialog-heading"><h2 id="capsule-title">Исправить принятую память</h2><button data-close="capsule-dialog" aria-label="Закрыть память">✕</button></div>
+  <p class="muted">Одна строка — один пункт. Это редактор ведущего, а не модельный запрос.</p>
+  <label for="cap-scene">Текущая ситуация</label><textarea id="cap-scene" rows="3"></textarea>
+  <div id="capsule-fields"></div>
+  <button id="save-capsule" class="primary">Сохранить память</button>
+</dialog>
+</body>
+</html>

@@ -113,6 +113,24 @@ def create_app(directory=None, background=True, shutdown=None):
     def world_page():
         return HTMLResponse((STATIC / "world.html").read_text("utf-8").replace("__CSRF__", token))
 
+    @app.get("/studio")
+    def studio_page():
+        return HTMLResponse((STATIC / "studio.html").read_text("utf-8").replace("__CSRF__", token))
+
+    @app.get("/api/studio")
+    def studio_state():
+        return service.studio.view()
+
+    @app.post("/api/studio/model")
+    def studio_model(body: WorldModelInput):
+        return service.studio.set_model(body.model)
+
+    @app.post("/api/studio/command")
+    def studio_command(body: Command):
+        if service.studio.store.read() and body.revision is None:
+            raise GameError("Обновите страницу перед командой.")
+        return service.studio.command(body.kind, body.data, body.command_id, body.revision)
+
     @app.get("/api/world")
     def world_state():
         return service.free_world.view()

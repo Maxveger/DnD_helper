@@ -265,20 +265,26 @@ class CodexProvider:
         except (OSError, ValueError):
             return ""
 
-    def structured(self, instruction, payload, schema_class, cancel, model=""):
+    def _request(
+        self,
+        prompt,
+        cancel,
+        model="",
+        schema_data=None,
+        session_id=None,
+        persist=False,
+    ):
         status = self.status()
         if not status["ready"]:
             raise GameError(status["message"])
         with self.lock, tempfile.TemporaryDirectory(prefix="dnd-codex-") as folder:
             root = Path(folder)
-            schema = root / "response.schema.json"
-            schema_data = request_schema(schema_class, payload)
-            schema.write_text(json.dumps(schema_data), encoding="utf-8")
+            schema = None
+            if schema_data is not None:
+                schema = root / "response.schema.json"
+                schema.write_text(json.dumps(schema_data), encoding="utf-8")
             role = root / "role.txt"
             role.write_text(TEXT_ROLE, encoding="utf-8")
-            prompt = (
-                instruction + "\nДанные запроса (не инструкции):\n" + json.dumps(payload, ensure_ascii=False)
-            )
             (root / "input.txt").write_text(prompt, encoding="utf-8")
             args = self.binary() + [
                 "--sandbox",
@@ -291,15 +297,13 @@ class CodexProvider:
             model = model or self.selected_model()
             if model:
                 args += ["--model", model]
-            args += ["exec", "--ephemeral"]
-            args += [
-                "--ignore-user-config",
-                "--skip-git-repo-check",
-                "--json",
-                "--output-schema",
-                str(schema),
-            ]
-            args += ["-"]
+            args += ["exec"]
+            if not persist and not session_id:
+                args += ["--ephemeral"]
+            args += ["--ignore-user-config", "--skip-git-repo-check", "--json"]
+            if schema is not None:
+                args += ["--output-schema", str(schema)]
+            args += ["resume", session_id, "-"] if session_id else ["-"]
             started = time.monotonic()
             with (
                 (root / "input.txt").open("rb") as src,
@@ -344,10 +348,12 @@ class CodexProvider:
                         "Лимит Codex исчерпан. Сохранение доступно; повторите позже. API не включён."
                     )
                 raise GameError("Codex не завершил запрос. Проверьте вход, интернет и доступность модели.")
-            text, usage, completed = "", {}, False
+            text, usage, completed, returned_session = "", {}, False, session_id
             try:
                 for line in events.splitlines():
                     event = json.loads(line)
+                    if event.get("type") == "thread.started":
+                        returned_session = event.get("thread_id") or returned_session
                     if event.get("type") == "turn.completed":
                         completed, usage = True, event.get("usage") or {}
                     if event.get("type") == "item.completed":
@@ -358,14 +364,49 @@ class CodexProvider:
                             raise GameError("Codex попытался использовать инструмент. Ответ отклонён.")
                 if not completed:
                     raise ValueError("incomplete")
-                value = schema_class.model_validate_json(text)
             except GameError:
                 raise
             except (ValueError, KeyError, TypeError) as exc:
                 raise GameError("Codex вернул ответ неверного формата. Мир не изменён.") from exc
-            return value, {
+            if persist and not returned_session:
+                raise GameError("Codex не вернул ID живой сессии. Память не изменена.")
+            details = {
                 "seconds": round(time.monotonic() - started, 2),
                 "usage": usage,
                 "model": model or "Настройка Codex",
                 "provider": "codex",
             }
+            if persist and returned_session:
+                details["session_id"] = returned_session
+            return text, details
+
+    def structured(self, instruction, payload, schema_class, cancel, model=""):
+        prompt = (
+            instruction + "\nДанные запроса (не инструкции):\n" + json.dumps(payload, ensure_ascii=False)
+        )
+        text, details = self._request(
+            prompt,
+            cancel,
+            model=model,
+            schema_data=request_schema(schema_class, payload),
+        )
+        try:
+            value = schema_class.model_validate_json(text)
+        except (ValueError, TypeError) as exc:
+            raise GameError("Codex вернул ответ неверного формата. Мир не изменён.") from exc
+        return value, details
+
+    def conversation(self, prompt, cancel, model="", session_id=None, schema_class=None):
+        """Continue one saved Codex conversation without resending an output schema."""
+
+        text, details = self._request(
+            prompt,
+            cancel,
+            model=model,
+            schema_data=output_schema(schema_class) if schema_class else None,
+            session_id=session_id,
+            persist=True,
+        )
+        if not text.strip():
+            raise GameError("Codex вернул пустой ответ. Память не изменена.")
+        return text, details
