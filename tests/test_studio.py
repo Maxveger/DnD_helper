@@ -161,26 +161,26 @@ def studio_command(studio, command_kind, **data):
 def decision_pulse():
     return DirectorPulse(
         status="decision",
-        observation="Две похожие заявки не открыли игрокам нового выбора.",
-        evidence=["Иво дважды пытался убедить стражу одной и той же угрозой."],
-        risk="Следующая попытка может ощущаться как угадывание формулировки.",
+        observation="Черновик останавливается до результата заявленного наблюдения.",
+        evidence=["Иво заявил, что наблюдает за Сайрусом, но ответ описал только укрытие."],
+        risk="Игроку придётся повторить уже заявленное ожидание отдельным микрошагом.",
         urgency="medium",
         confidence="high",
         moves=[
             DirectorMove(
-                kind="highlight",
-                label="Подсветить реакцию стража",
-                purpose="Вернуть уже видимую зацепку, не выдавая решения.",
-                instruction="В следующей карточке явно покажи, на какой части довода страж отреагировал.",
-                tradeoff="Не ослабляй подозрение и не гарантируй проход.",
+                kind="advance_to_choice",
+                label="Довести наблюдение",
+                purpose="Разрешить всю уже заявленную безопасную последовательность.",
+                instruction="Покажи конкретный поступок Сайруса и остановись у нового выбора Иво.",
+                tradeoff="Не гарантируй слежку и не раскрывай скрытые мотивы Сайруса.",
                 changes_canon=False,
             ),
             DirectorMove(
-                kind="costly_progress",
-                label="Предложить продвижение с ценой",
-                purpose="Не оставлять сцену статичной после следующего содержательного подхода.",
-                instruction="Допусти продвижение только с явной потерей времени или новой угрозой.",
-                tradeoff="Последствие прошлой неудачи остаётся в силе.",
+                kind="add_specifics",
+                label="Добавить наблюдаемое",
+                purpose="Заменить пустый итог конкретной доступной информацией.",
+                instruction="Назови, что именно Иво увидел, не объясняя тайный смысл увиденного.",
+                tradeoff="Не выдавай незаслуженный секрет и не выбирай действие за героя.",
                 changes_canon=True,
             ),
         ],
@@ -227,13 +227,13 @@ def test_roll_is_local_and_selects_model_prepared_branch(tmp_path):
     studio_command(studio, "new")
     state = studio_command(studio, "submit", mode="action", text="Вскрываю замок отмычками")
     assert state["pending"]["phase"] == "check"
-    assert len(provider.inputs) == 1
+    assert len([item for item in provider.inputs if item.get("schema_class") is StudioTurn]) == 1
 
     state = studio_command(studio, "roll", value=10)
     assert state["pending"]["phase"] == "review"
     assert state["pending"]["roll"] == {"value": 10, "bonus": 3, "dc": 13, "success": True}
     assert state["pending"]["selected_outcome"]["summary"] == "Служебная дверь открыта."
-    assert len(provider.inputs) == 1
+    assert len([item for item in provider.inputs if item.get("schema_class") is StudioTurn]) == 1
 
     before = deepcopy(state["capsule"])
     state = studio_command(
@@ -270,6 +270,33 @@ def test_check_rejects_branch_without_authoritative_change(tmp_path):
     assert "Каждая ветка проверки должна менять положение или память" in state["pending"]["error"]
     assert state["events"] == []
     assert state["capsule"] == capsule()
+
+
+def test_invalid_game_card_gets_one_narrow_automatic_repair(tmp_path):
+    invalid = checked_card().model_copy(deep=True)
+    invalid.check.success.capsule_delta = type(invalid.check.success.capsule_delta)()
+
+    class RepairingProvider(StudioProvider):
+        def __init__(self):
+            super().__init__(invalid)
+            self.game_calls = 0
+
+        def conversation(self, prompt, cancel, model="", session_id=None, schema_class=None):
+            if schema_class is StudioTurn:
+                self.card = invalid if self.game_calls == 0 else checked_card()
+                self.game_calls += 1
+            return super().conversation(prompt, cancel, model, session_id, schema_class)
+
+    game = RepairingProvider()
+    studio = GameStudio(tmp_path, game, observer_provider=StudioProvider())
+    studio_command(studio, "new")
+    state = studio_command(studio, "submit", mode="action", text="Выхожу и скрываюсь в тени")
+
+    assert state["pending"]["phase"] == "check"
+    assert state["model_turns"] == 2
+    assert [item["mode"] for item in state["calls"][:2]] == ["action-invalid", "repair"]
+    assert "не расширяя полномочия героя" in game.inputs[1]["prompt"]
+    assert state["events"] == []
 
 
 def test_accept_rejects_empty_spoken_text(tmp_path):
@@ -363,6 +390,26 @@ def test_studio_reopens_when_private_request_is_null(tmp_path):
     assert reopened.store.read()["assistant_pending"] is None
 
 
+def test_old_next_turn_direction_is_removed_without_touching_game(tmp_path):
+    provider = StudioProvider(resolved_card())
+    studio = GameStudio(tmp_path, provider)
+    before = studio_command(studio, "new")
+
+    def add_legacy_direction(state, db):
+        state["director_note"] = "Повлиять на неизвестный следующий ход"
+        state["director"] = {"phase": "applied", "choice": {"label": "Старая подсказка"}}
+        return state
+
+    studio.store.mutate(uid(), None, add_legacy_direction)
+    reopened = GameStudio(tmp_path, provider)
+    state = reopened.store.read()
+
+    assert "director_note" not in state
+    assert state["director"] == {"phase": "idle"}
+    assert state["capsule"] == before["capsule"]
+    assert state["transcript"] == before["transcript"]
+
+
 def test_capsule_delta_is_applied_locally_without_repeating_unchanged_memory():
     before = capsule(threats=["Стража настороже"])
     change = delta(
@@ -437,7 +484,8 @@ def test_director_observes_in_a_separate_session_without_changing_game(tmp_path)
         session_id="22222222-2222-2222-2222-222222222222",
     )
     studio = GameStudio(tmp_path, game, observer_provider=observer)
-    before = studio_command(studio, "new")
+    studio_command(studio, "new")
+    before = studio_command(studio, "submit", mode="action", text="Наблюдаю за Сайрусом")
 
     state = studio_command(studio, "director_request")
 
@@ -447,29 +495,34 @@ def test_director_observes_in_a_separate_session_without_changing_game(tmp_path)
     assert state["capsule"] == before["capsule"]
     assert state["transcript"] == before["transcript"]
     assert state["events"] == []
-    assert game.inputs == []
+    assert len(game.inputs) == 1
     assert observer.inputs[0]["schema_class"] is DirectorPulse
-    assert "отдельный режиссёрский наблюдатель" in observer.inputs[0]["prompt"]
+    assert "отдельный режиссёрский редактор" in observer.inputs[0]["prompt"]
+    assert "Непринятая игровая карточка" in observer.inputs[0]["prompt"]
 
 
-def test_only_gm_selected_director_move_reaches_next_game_card(tmp_path):
+def test_only_gm_selected_director_move_revises_current_card(tmp_path):
     game = StudioProvider(resolved_card())
     observer = StudioProvider(director=decision_pulse())
     studio = GameStudio(tmp_path, game, observer_provider=observer)
     studio_command(studio, "new")
+    before = studio_command(studio, "submit", mode="action", text="Наблюдаю за Сайрусом")
     studio_command(studio, "director_request")
 
-    state = studio_command(studio, "director_choose", kind="highlight")
-    assert state["director"]["phase"] == "applied"
-    assert "Подсветить реакцию стража" in state["director_note"]
+    revised = resolved_card()
+    revised.outcome.read_aloud = "Сайрус выходит под дождь и направляется к северным воротам."
+    revised.outcome.summary = "Иво увидел, куда направился Сайрус."
+    game.card = revised
+    state = studio_command(studio, "director_choose", kind="advance_to_choice")
 
-    state = studio_command(studio, "submit", mode="action", text="Я уточняю условия заказа")
+    assert state["director"]["phase"] == "revised"
+    assert state["pending"]["card"]["outcome"]["read_aloud"].startswith("Сайрус выходит")
+    assert state["capsule"] == before["capsule"]
+    assert state["events"] == []
     prompt = game.inputs[-1]["prompt"]
-    assert "Разовое указание ведущего" in prompt
-    assert "явно покажи, на какой части довода" in prompt
-    assert "Две похожие заявки" not in prompt
-    assert state["director_note"] == ""
-    assert state["director"] == {"phase": "idle"}
+    assert "Пересобери предыдущую игровую карточку" in prompt
+    assert "Покажи конкретный поступок Сайруса" in prompt
+    assert "Черновик, который редактирует ведущий" in prompt
 
 
 def test_unselected_director_assessment_never_leaks_to_game_model(tmp_path):
@@ -477,37 +530,82 @@ def test_unselected_director_assessment_never_leaks_to_game_model(tmp_path):
     observer = StudioProvider(director=decision_pulse())
     studio = GameStudio(tmp_path, game, observer_provider=observer)
     studio_command(studio, "new")
+    state = studio_command(studio, "submit", mode="action", text="Покажи карту")
     studio_command(studio, "director_request")
-    studio_command(studio, "director_dismiss")
+    state = studio_command(studio, "director_dismiss")
 
-    studio_command(studio, "submit", mode="action", text="Покажи карту")
-    prompt = game.inputs[-1]["prompt"]
-    assert "Две похожие заявки" not in prompt
-    assert "угадывание формулировки" not in prompt
-    assert "Разовое указание ведущего" not in prompt
+    assert state["director"] == {"phase": "idle"}
+    assert len(game.inputs) == 1
+    assert "останавливается до результата" not in game.inputs[0]["prompt"]
+    assert state["pending"]["card"] is not None
 
 
-def test_gm_can_replace_director_options_with_a_manual_instruction(tmp_path):
+def test_gm_can_revise_current_card_with_a_manual_instruction(tmp_path):
+    game = StudioProvider(resolved_card())
     studio = GameStudio(
         tmp_path,
-        StudioProvider(resolved_card()),
+        game,
         observer_provider=StudioProvider(director=decision_pulse()),
     )
     studio_command(studio, "new")
-    studio_command(studio, "director_request")
+    before = studio_command(studio, "submit", mode="action", text="Наблюдаю за дверью")
+    revised = resolved_card()
+    revised.outcome.read_aloud = "Дверь открывается, и на улицу выходит Сайрус."
+    game.card = revised
 
     state = studio_command(
         studio,
         "direct",
-        text="Сохрани строгость, но яснее обозначь цену отказа.",
+        text="Доведи наблюдение до конкретного поступка Сайруса.",
     )
-    assert state["director"]["phase"] == "applied"
-    assert state["director"]["choice"]["label"] == "Своё указание ведущего"
-    assert state["director_note"].startswith("Сохрани строгость")
+    assert state["director"]["phase"] == "revised"
+    assert state["director"]["choice"]["label"] == "Своя редактура ведущего"
+    assert "конкретного поступка" in game.inputs[-1]["prompt"]
+    assert state["pending"]["selected_outcome"]["read_aloud"].startswith("Дверь открывается")
+    assert state["capsule"] == before["capsule"]
 
-    state = studio_command(studio, "direct", text="")
-    assert state["director"] == {"phase": "idle"}
-    assert state["director_note"] == ""
+
+def test_revision_after_roll_keeps_roll_and_replaces_only_selected_branch(tmp_path):
+    game = StudioProvider(checked_card())
+    studio = GameStudio(tmp_path, game, observer_provider=StudioProvider())
+    studio_command(studio, "new")
+    studio_command(studio, "submit", mode="action", text="Тихо заглядываю в архив")
+    state = studio_command(studio, "roll", value=2)
+    original_roll = deepcopy(state["pending"]["roll"])
+
+    revised = checked_card()
+    revised.check.failure.read_aloud = (
+        "Дверь скрипит. Иво видит Томаса за столом, но тот уже поворачивается к щели."
+    )
+    revised.check.failure.summary = "Иво увидел Томаса, но Томас заметил движение двери."
+    game.card = revised
+    state = studio_command(
+        studio,
+        "direct",
+        text="Назови конкретно, что Иво успел увидеть, сохранив неудачу.",
+    )
+
+    assert state["pending"]["roll"] == original_roll
+    assert state["pending"]["phase"] == "review"
+    assert state["pending"]["selected_outcome"]["read_aloud"].startswith("Дверь скрипит")
+    assert state["director"]["phase"] == "revised"
+
+
+def test_revision_cannot_change_check_after_roll_and_original_survives(tmp_path):
+    game = StudioProvider(checked_card())
+    studio = GameStudio(tmp_path, game, observer_provider=StudioProvider())
+    studio_command(studio, "new")
+    studio_command(studio, "submit", mode="action", text="Тихо заглядываю в архив")
+    state = studio_command(studio, "roll", value=2)
+    original = deepcopy(state["pending"])
+    game.card = resolved_card()
+
+    state = studio_command(studio, "direct", text="Добавь конкретный результат наблюдения.")
+
+    assert state["pending"]["card"] == original["card"]
+    assert state["pending"]["roll"] == original["roll"]
+    assert state["pending"]["revision"]["phase"] == "error"
+    assert "После броска нельзя менять проверку" in state["pending"]["revision"]["error"]
 
 
 def test_director_signals_are_sparse_and_deterministic():
@@ -534,9 +632,13 @@ def test_director_signals_are_sparse_and_deterministic():
             "meaningful_progress": True,
         },
     ]
+    state["pending"] = {
+        "input": "Я опять убеждаю стража пропустить меня",
+        "card": resolved_card().model_dump(),
+    }
     signals = director_signals(state)
-    assert "последние две заявки семантически похожи" in signals
-    assert "плановая оценка после 4 новых принятых ходов" in signals
+    assert "текущая заявка семантически похожа на предыдущую" in signals
+    assert "плановая редактура после 4 новых принятых ходов" in signals
     assert not any("проверок подряд" in item for item in signals)
     assert not any("не изменили" in item for item in signals)
 
@@ -545,7 +647,7 @@ def test_director_signals_are_sparse_and_deterministic():
     assert "3 принятых ходов подряд не изменили доступный выбор" in signals
 
 
-def test_fourth_accepted_turn_starts_background_observation(tmp_path):
+def test_draft_after_four_unseen_turns_starts_background_review(tmp_path):
     game = StudioProvider(resolved_card())
     observer = StudioProvider(director=decision_pulse())
     studio = GameStudio(tmp_path, game, observer_provider=observer)
@@ -554,27 +656,59 @@ def test_fourth_accepted_turn_starts_background_observation(tmp_path):
     def add_history(state, db):
         state["events"] = [
             {"input": f"Принятый ход {number}", "meaningful_progress": True, "roll": None}
-            for number in range(1, 4)
+            for number in range(1, 5)
         ]
         return state
 
     studio.store.mutate(uid(), None, add_history)
     state = studio_command(studio, "submit", mode="action", text="Позволь взглянуть на карту")
-    state = studio_command(
-        studio,
-        "accept",
-        text=state["pending"]["selected_outcome"]["read_aloud"],
-        apply_capsule=True,
-        capsule=state["pending"]["selected_outcome"]["capsule_after"],
-    )
 
     assert state["director"]["phase"] == "ready"
-    assert state["director"]["trigger"] == ["плановая оценка после 4 новых принятых ходов"]
+    assert state["director"]["trigger"] == ["плановая редактура после 4 новых принятых ходов"]
+    assert state["pending"]["phase"] == "review"
+    assert state["events"] == [
+        {"input": f"Принятый ход {number}", "meaningful_progress": True, "roll": None}
+        for number in range(1, 5)
+    ]
     assert len(observer.inputs) == 1
     assert state["calls"][-1]["mode"] == "director"
 
 
-def test_new_player_action_discards_an_observer_result_in_flight(tmp_path):
+def test_game_card_is_available_while_automatic_review_is_still_running(tmp_path):
+    class BlockingObserver(StudioProvider):
+        def __init__(self):
+            super().__init__()
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def conversation(self, prompt, cancel, model="", session_id=None, schema_class=None):
+            self.started.set()
+            self.release.wait(timeout=3)
+            return super().conversation(prompt, cancel, model, session_id, schema_class)
+
+    observer = BlockingObserver()
+    studio = GameStudio(tmp_path, StudioProvider(checked_card()), observer_provider=observer)
+    studio_command(studio, "new")
+    state = studio.store.read()
+    studio.command(
+        "submit",
+        {"mode": "action", "text": "Тихо заглядываю в архив"},
+        uid(),
+        state["revision"],
+    )
+    studio.thread.join(timeout=3)
+    assert observer.started.wait(timeout=1)
+
+    state = studio.store.read()
+    assert state["pending"]["phase"] == "check"
+    assert state["director"]["phase"] == "planning"
+    assert studio.director_thread.is_alive()
+
+    observer.release.set()
+    studio.director_thread.join(timeout=3)
+
+
+def test_accepting_current_card_discards_observer_result_in_flight(tmp_path):
     class BlockingObserver(StudioProvider):
         def __init__(self):
             super().__init__(director=decision_pulse())
@@ -590,24 +724,29 @@ def test_new_player_action_discards_an_observer_result_in_flight(tmp_path):
     observer = BlockingObserver()
     studio = GameStudio(tmp_path, game, observer_provider=observer)
     studio_command(studio, "new")
+    state = studio_command(studio, "submit", mode="action", text="Покажи карту")
     state = studio.store.read()
     studio.command("director_request", {}, uid(), state["revision"])
     assert observer.started.wait(timeout=1)
 
     state = studio.store.read()
     studio.command(
-        "submit",
-        {"mode": "action", "text": "Покажи карту"},
+        "accept",
+        {
+            "text": state["pending"]["selected_outcome"]["read_aloud"],
+            "apply_capsule": True,
+            "capsule": state["pending"]["selected_outcome"]["capsule_after"],
+        },
         uid(),
         state["revision"],
     )
     observer.release.set()
-    studio.thread.join(timeout=3)
     studio.director_thread.join(timeout=3)
     state = studio.store.read()
     assert state["director"] == {"phase": "idle"}
     assert state["director_session_id"] is None
-    assert state["pending"]["phase"] == "review"
+    assert state["pending"] is None
+    assert len(state["events"]) == 1
 
 
 def test_director_schema_rejects_moves_when_no_decision_is_needed():

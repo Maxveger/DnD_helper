@@ -1,5 +1,6 @@
 """Isolated browser check for /studio; deterministic responses, no subscription use."""
 
+import re
 import shutil
 import socket
 import tempfile
@@ -31,17 +32,17 @@ class Stub:
         if schema_class is DirectorPulse:
             turn = DirectorPulse(
                 status="decision",
-                observation="Игра движется, но ведущий может сделать следующий выбор нагляднее.",
-                evidence=["Иво получил план Дома."],
-                risk="Без акцента игрок может не заметить уже известный вход.",
+                observation="Черновик можно довести до более конкретного результата.",
+                evidence=["Ответ на просьбу показывает план, но не называет служебный вход."],
+                risk="Игроку придётся повторно спрашивать о доступном пути.",
                 urgency="low",
                 confidence="medium",
                 moves=[
                     DirectorMove(
-                        kind="highlight",
-                        label="Подсветить известный вход",
-                        purpose="Вернуть игроку уже полученную деталь.",
-                        instruction="Упомяни известный служебный вход, не выбирая его за героя.",
+                        kind="add_specifics",
+                        label="Добавить конкретику карты",
+                        purpose="Завершить текущий ответ наблюдаемой деталью.",
+                        instruction="Упомяни отмеченный служебный вход, не выбирая его за героя.",
                         tradeoff="Не раскрывай охрану и не гарантируй проникновение.",
                         changes_canon=False,
                     )
@@ -55,6 +56,7 @@ class Stub:
                 observations=["Совет не меняет принятую память."],
             )
         else:
+            revised = "Пересобери предыдущую игровую карточку" in prompt
             turn = StudioTurn(
                 kind="card",
                 card=StudioCard.model_validate(
@@ -64,7 +66,13 @@ class Stub:
                         "stop": "resolved",
                         "canon_used": ["У Сайруса есть грубый план Дома."],
                         "outcome": {
-                            "read_aloud": "Сайрус поворачивает лист. На нём отмечены вход, канцелярия, архив и решётка реликвария.",
+                            "read_aloud": (
+                                "Сайрус поворачивает лист. Кроме главного входа, на плане отмечен "
+                                "боковой служебный проход, затем канцелярия, архив и решётка реликвария."
+                                if revised
+                                else "Сайрус поворачивает лист. На нём отмечены вход, канцелярия, "
+                                "архив и решётка реликвария."
+                            ),
                             "summary": "Иво изучил общий план Дома.",
                             "capsule_delta": {
                                 "scene": None,
@@ -131,9 +139,17 @@ def main():
                 expect(page.locator("#capsule")).not_to_contain_text("Иво запомнил общий план")
                 assert stub.calls[0]["session_id"] is None
                 assert '"id": "eye_studio_slice"' in stub.calls[0]["prompt"]
+
+                page.get_by_role("button", name="Оценить черновик").click()
+                expect(page.locator("#pulse-content")).to_contain_text("более конкретного результата")
+                expect(page.get_by_role("button", name="Пересобрать карточку")).to_be_visible()
+                page.get_by_role("button", name="Пересобрать карточку").click()
+                expect(page.locator("#draft-text")).to_have_value(re.compile("боковой служебный проход"))
+                expect(page.locator("#pulse-content")).to_contain_text("Открытая карточка заменена")
+
                 page.get_by_role("button", name="Принять текст и память").click()
                 expect(page.locator("#capsule")).to_contain_text("Иво запомнил общий план")
-                expect(page.locator("#model-memory-status")).to_contain_text("1 ответов")
+                expect(page.locator("#model-memory-status")).to_contain_text("2 ответов")
                 assert page.locator("#game-stream").evaluate(
                     "el => getComputedStyle(el).overflowY === 'auto' && el.scrollHeight > el.clientHeight"
                 )
@@ -142,13 +158,6 @@ def main():
                 )
                 assert page.evaluate("document.body.scrollHeight <= innerHeight + 1")
                 expect(page.locator("#action")).to_be_in_viewport()
-
-                page.get_by_role("button", name="Оценить сейчас").click()
-                expect(page.locator("#pulse-content")).to_contain_text("следующий выбор нагляднее")
-                expect(page.get_by_role("button", name="Выбрать")).to_be_visible()
-                page.get_by_role("button", name="Выбрать").click()
-                expect(page.locator("#pulse-content")).to_contain_text("Указание уйдёт только")
-                assert "известный служебный вход" in page.locator("#director-note").input_value()
 
                 page.locator("#private-input").fill("Сайрус уже дал задаток?")
                 page.locator("#send-private").click()
