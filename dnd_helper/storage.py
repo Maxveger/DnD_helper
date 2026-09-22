@@ -29,9 +29,6 @@ class Store:
                 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, created REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS checkpoints (id INTEGER PRIMARY KEY, session TEXT, body TEXT);
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY, body TEXT, sent INTEGER DEFAULT 0);
-                CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, session TEXT, kind TEXT,
-                    amount REAL, reserved INTEGER, created REAL, detail TEXT);
                 PRAGMA user_version=1;
             """)
 
@@ -91,57 +88,3 @@ class Store:
         with self.connect() as db, closing(sqlite3.connect(target)) as dest:
             db.backup(dest)
         return target
-
-    def enqueue(self, body, db=None):
-        if db is None:
-            with self.connect() as conn:
-                self.enqueue(body, conn)
-            return
-        # Bound UTF-16 length too (a non-BMP character takes two Telegram units).
-        # Keep all published clues in imported adventures instead of truncating them.
-        text = body.get("text", "")
-        chunks = [text[i : i + 1800] for i in range(0, len(text), 1800)] or [""]
-        for i, chunk in enumerate(chunks):
-            item = {**body, "text": chunk}
-            if i < len(chunks) - 1:
-                item.pop("reply_markup", None)
-            db.execute("INSERT INTO outbox(body) VALUES (?)", (encode(item),))
-
-    def outbox(self):
-        with self.connect() as db:
-            return [
-                (row["id"], json.loads(row["body"]))
-                for row in db.execute("SELECT id, body FROM outbox WHERE sent=0 ORDER BY id LIMIT 20")
-            ]
-
-    def delivered(self, key):
-        with self.connect() as db:
-            db.execute("UPDATE outbox SET sent=1 WHERE id=?", (key,))
-
-    def spending(self, session):
-        with self.connect() as db:
-            rows = db.execute(
-                "SELECT kind, amount, reserved, detail FROM usage WHERE session=?", (session,)
-            ).fetchall()
-            return {
-                "total": round(sum(r["amount"] for r in rows), 6),
-                "calls": len(rows),
-                "pending": sum(r["reserved"] for r in rows),
-                "recent": [dict(r) for r in rows[-6:]],
-            }
-
-    def reserve(self, key, session, kind, amount, limit):
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            total = db.execute(
-                "SELECT COALESCE(SUM(amount), 0) FROM usage WHERE session=?", (session,)
-            ).fetchone()[0]
-            if amount <= 0 or total + amount > limit:
-                raise GameError("Лимит API достигнут. Доступны готовые действия и ручное ведение.")
-            db.execute(
-                "INSERT INTO usage VALUES (?, ?, ?, ?, 1, ?, '')", (key, session, kind, amount, time.time())
-            )
-
-    def settle(self, key, amount, detail=""):
-        with self.connect() as db:
-            db.execute("UPDATE usage SET amount=?, reserved=0, detail=? WHERE id=?", (amount, detail, key))

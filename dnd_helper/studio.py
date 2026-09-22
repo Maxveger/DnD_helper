@@ -13,10 +13,21 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .codex_provider import CodexProvider
-from .engine import uid
-from .free_world import DEFAULT_MODEL, WORLD_MODELS
 from .rules import GameError, require
 from .storage import Store, encode
+
+
+DEFAULT_MODEL = "gpt-5.6-luna"
+WORLD_MODELS = {
+    "gpt-5.6-luna": "Luna — экономная",
+    "gpt-5.6-terra": "Terra — сбалансированная",
+    "gpt-6-astra": "Astra — сложные задачи",
+    "": "Из настроек Codex",
+}
+
+
+def uid():
+    return secrets.token_hex(8)
 
 
 class Strict(BaseModel):

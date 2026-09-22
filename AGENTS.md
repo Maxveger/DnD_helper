@@ -1,14 +1,11 @@
 # Project context
 
-Start with `docs/README.md` for the documentation map and `docs/NEXT_STEPS.md` for the pause/resume state. Read `docs/PROJECT_BRIEF.md` before changing product behavior. It records the user's decisions and takes priority over older design documents when they disagree.
+Start with `docs/README.md`, `docs/PROJECT_BRIEF.md` and `docs/NEXT_STEPS.md`.
 
-- This is an assistant for a **human beginner GM running a tabletop group**, not a solo AI game. Players choose actions; the GM selects what to say and confirms consequences.
-- The current slice is text-only, local web + the operator's own Codex subscription, using economical Luna. No implicit paid API fallback, Telegram delivery or voice work.
-- A normal GM card uses **one** model request, including both dice outcomes. Roll, edits, known travel, confirmation and journal restore are local. Measure added requests before putting them on the live path.
-- Custom starting scenarios, lore, immutable secrets and import/export of the game journal are part of the product. Preserve `dnd-world@1`, `dnd-world-log@1` and the separate prepared-adventure mode.
-- Generated text is a GM draft and may contain mistakes. Mechanical effects are validated, visible and transactional; text cannot mutate state. Do not expose this secret-bearing screen/prompt as a player channel.
-- Never reset or play through the user's local saves for tests. Use temporary directories. Keep credentials, logs containing user data and local CLI installation out of Git.
-- Distinguish source checks, live model measurements and published Windows releases. Do not describe a short probe or simulated history as a tested full game.
-
-- The GM is a complete beginner. Keep the spoken passage prominent; settings/import/diagnostics and mechanical review are secondary. Advice must not look like an applied action or remain a sticky hidden mode. One visible hero panel uses name tabs; do not stack every character card.
-- The fresh start authorized for the completed UI iteration has already been performed. Development is paused at the user’s request; documentation maintenance must not reset or play the game. Do not treat the previous reset as blanket permission for future saves.
+- The repository has one supported product and route: the live-model GM studio at `/studio` (also served at `/`). Do not recreate the removed prepared-adventure demo, `/world`, Telegram or paid API paths.
+- This is an assistant for a human beginner GM running a tabletop group, not a solo AI game. Players choose actions; the GM selects what to say and confirms consequences.
+- The current slice is text-only, local web + the operator's own Codex subscription, using economical Luna. No implicit paid API fallback.
+- A normal GM card uses one model request, including both dice outcomes. Roll, edits, confirmation and restore are local.
+- Generated text is a GM draft. Mechanical effects are visible and transactional; text cannot mutate state.
+- Never reset or play through the user's local save for tests. Use temporary directories. Keep credentials, user logs and local CLI installations out of Git.
+- Distinguish source checks, live model measurements and published releases. Do not describe a stubbed or short probe as a tested full game.

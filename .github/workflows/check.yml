@@ -38,12 +38,9 @@ jobs:
       - name: Install browser for Windows acceptance
         if: runner.os == 'Windows'
         run: uv run --frozen playwright install chromium
-      - name: Check imported story in frozen Windows browser UI
+      - name: Check studio in browser
         if: runner.os == 'Windows'
-        run: python scripts/ci_command.py uv run --frozen python scripts/browser_import_check.py --executable dist/DnD-Helper/DnD-Helper.exe
-      - name: Check demo recovery and combat in frozen Windows browser UI
-        if: runner.os == 'Windows'
-        run: python scripts/ci_command.py uv run --frozen python scripts/browser_gameplay_check.py --executable dist/DnD-Helper/DnD-Helper.exe
+        run: python scripts/ci_command.py uv run --frozen python scripts/browser_studio_check.py
       - name: Package source code
         if: runner.os == 'Windows'
         run: python scripts/ci_command.py uv run --frozen python scripts/source_archive.py
@@ -63,7 +60,6 @@ jobs:
           name: diagnostics-${{ matrix.os }}
           path: |
             build/test-results.xml
-            build/browser-import/*.png
-            build/browser-gameplay/*.png
+            build/browser-studio/*.png
           if-no-files-found: ignore
           retention-days: 7

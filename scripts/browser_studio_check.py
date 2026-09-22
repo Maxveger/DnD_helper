@@ -99,7 +99,6 @@ def main():
     with tempfile.TemporaryDirectory(prefix="dnd-studio-browser-") as folder:
         app = create_app(Path(folder), background=False)
         stub = Stub()
-        app.state.service.free_world.provider = stub
         app.state.service.studio.provider = stub
         app.state.service.studio.observer_provider = stub
         sock = socket.socket()
@@ -171,7 +170,6 @@ def main():
                 print("Studio browser: fixed laptop workspace and independent panes OK")
         finally:
             app.state.service.studio.close()
-            app.state.service.free_world.close()
             server.should_exit = True
             thread.join(10)
             sock.close()

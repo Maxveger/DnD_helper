@@ -1,9 +1,7 @@
-# Local credentials
+# Local environment
 .env
 .env.*
 !.env.example
-settings.local.json
-secrets.local.json
 
 # Runtime state and private session data
 /data/

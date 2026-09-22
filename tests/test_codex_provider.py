@@ -195,83 +195,25 @@ def test_codex_tools_disabled_and_auth_untouched(provider):
 
 def test_codex_schema_uses_supported_union_but_keeps_local_validation():
     import json
-    from dnd_helper.codex_provider import output_schema
-    from dnd_helper.free_world import Proposal
 
-    schema = output_schema(Proposal)
+    from dnd_helper.codex_provider import output_schema
+    from dnd_helper.studio import StudioTurn
+
+    schema = output_schema(StudioTurn)
     assert "oneOf" not in json.dumps(schema)
     assert "discriminator" not in json.dumps(schema)
     assert "default" not in json.dumps(schema)
     assert '"title"' not in json.dumps(schema)
     assert "minItems" not in json.dumps(schema)
     assert "anyOf" in json.dumps(schema)
-    assert "oneOf" in json.dumps(Proposal.model_json_schema())
-
-
-def test_director_travel_destination_is_limited_to_prepared_options():
-    from dnd_helper.codex_provider import request_schema
-    from dnd_helper.free_world import DirectorCard
-
-    schema = request_schema(
-        DirectorCard,
-        {
-            "travel_options": [
-                {"destination": "courtyard"},
-                {"destination": "archive"},
-            ],
-            "entity_index": {"courtyard": {}, "archive": {}},
-        },
-    )
-    assert schema["$defs"]["TravelEffect"]["properties"]["destination"]["enum"] == [
-        "courtyard",
-        "archive",
-    ]
+    assert "anyOf" in json.dumps(StudioTurn.model_json_schema())
 
 
 def test_codex_output_schema_requires_every_object_property():
     from dnd_helper.codex_provider import output_schema
-    from dnd_helper.free_world import Advice
+    from dnd_helper.studio import DirectorPulse
 
-    schema = output_schema(Advice)
-    entity = schema["$defs"]["Entity"]
-    assert set(entity["required"]) == set(entity["properties"])
+    schema = output_schema(DirectorPulse)
+    move = schema["$defs"]["DirectorMove"]
+    assert set(move["required"]) == set(move["properties"])
     assert set(schema["required"]) == set(schema["properties"])
-
-
-def test_assistant_schema_constrains_evidence_targets_and_speaker_ids():
-    from dnd_helper.codex_provider import request_schema
-    from dnd_helper.free_world import Advice, initial_world
-
-    world = initial_world()
-    world["action"] = {"actor": "mira"}
-    schema = request_schema(Advice, world)["properties"]
-    assert schema["evidence"]["items"]["enum"] == ["water", "help"]
-    assert schema["speaker"]["anyOf"][0]["enum"] == ["ada"]
-    assert schema["intent"]["$ref"] == "#/$defs/Intent"
-    world["entities"]["mira"]["location"] = "forest"
-    world["facts"] = {}
-    full_schema = request_schema(Advice, world)
-    schema = full_schema["properties"]
-    assert schema["speaker"]["anyOf"][0]["enum"] == ["ada"]
-    assert schema["evidence"]["maxItems"] == 0
-    assert set(full_schema["$defs"]["Intent"]["properties"]["targets"]["items"]["enum"]) == set(
-        world["entities"]
-    )
-
-
-def test_assistant_schema_uses_compact_scene_but_allows_indexed_targets():
-    from dnd_helper.codex_provider import request_schema
-    from dnd_helper.free_world import Advice, build_scene_context
-    from dnd_helper.world_documents import example_document, start_document
-
-    world = start_document(example_document())
-    payload = build_scene_context(
-        world,
-        {"id": "a", "actor": "mira", "participants": ["mira"], "text": "Осматриваю площадь", "mode": "action"},
-    )
-    schema = request_schema(Advice, payload)
-    assert set(schema["properties"]["evidence"]["items"]["enum"]) == {"water", "help"}
-    assert schema["properties"]["speaker"]["anyOf"][0]["enum"] == ["ada"]
-    assert set(schema["$defs"]["Intent"]["properties"]["targets"]["items"]["enum"]) == (
-        set(payload["entity_index"]) | {"water", "help"}
-    )

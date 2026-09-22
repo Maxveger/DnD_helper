@@ -3,7 +3,6 @@ import threading
 
 import pytest
 
-from dnd_helper.engine import uid
 from dnd_helper.rules import GameError
 from dnd_helper.studio import (
     COMPACT_AFTER_INPUT_TOKENS,
@@ -18,6 +17,7 @@ from dnd_helper.studio import (
     director_signals,
     initial_state,
     load_dossier,
+    uid,
 )
 
 
@@ -220,7 +220,7 @@ def test_live_card_only_changes_memory_after_gm_accepts(tmp_path):
     assert state["pending"] is None
 
 
-def test_roll_is_local_and_selects_prepared_branch(tmp_path):
+def test_roll_is_local_and_selects_model_prepared_branch(tmp_path):
     provider = StudioProvider(checked_card())
     studio = GameStudio(tmp_path, provider)
     studio_command(studio, "new")

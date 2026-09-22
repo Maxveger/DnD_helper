@@ -1,9 +1,0 @@
-{
-  "openai_key": "",
-  "telegram_token": "",
-  "ai_enabled": false,
-  "telegram_enabled": false,
-  "model": "gpt-5.4-mini",
-  "transcription_model": "gpt-4o-mini-transcribe",
-  "budget": 1.0
-}

@@ -62,7 +62,7 @@ def _main():
     if not lock.acquire():
         if runtime.exists() and not args.no_browser:
             info = json.loads(runtime.read_text("utf-8"))
-            webbrowser.open(f"http://127.0.0.1:{int(info['port'])}")
+            webbrowser.open(f"http://127.0.0.1:{int(info['port'])}/studio")
         lock.close()
         return
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -93,7 +93,7 @@ def _main():
                 try:
                     with urllib.request.urlopen(url + "/health", timeout=1) as response:
                         if response.status == 200:
-                            webbrowser.open(url)
+                            webbrowser.open(url + "/studio")
                             return
                 except OSError:
                     time.sleep(0.1)
@@ -113,7 +113,7 @@ def main():
         _main()
     except Exception as exc:
         message = (
-            "Не удалось запустить DnD Helper. Проверьте доступ к папке данных и файл settings.local.json. "
+            "Не удалось запустить DnD Helper. Проверьте доступ к папке данных и установку Codex CLI. "
             f"Тип ошибки: {type(exc).__name__}. Подробности ключей не выводятся."
         )
         if os.name == "nt" and "--no-browser" not in sys.argv:

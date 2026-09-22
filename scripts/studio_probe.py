@@ -6,8 +6,7 @@ import tempfile
 import threading
 from pathlib import Path
 
-from dnd_helper.engine import uid
-from dnd_helper.studio import GameStudio
+from dnd_helper.studio import GameStudio, uid
 
 
 def run(studio, kind, **data):

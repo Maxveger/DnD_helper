@@ -15,10 +15,8 @@ files = [
     "uv.lock",
     ".python-version",
     ".gitignore",
-    "settings.example.json",
     "start.sh",
     "start.cmd",
-    "DnD.pdf",
 ]
 paths = [root / file for file in files]
 for folder in folders:
