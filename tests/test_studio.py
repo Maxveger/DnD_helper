@@ -1,11 +1,17 @@
 from copy import deepcopy
 
+import pytest
+
 from dnd_helper.engine import uid
+from dnd_helper.rules import GameError
 from dnd_helper.studio import (
+    COMPACT_AFTER_INPUT_TOKENS,
+    COMPACT_AFTER_TURNS,
     GameStudio,
     StudioCard,
     StudioChatReply,
     StudioTurn,
+    apply_capsule_delta,
     initial_state,
     load_dossier,
 )
@@ -27,8 +33,21 @@ class StudioProvider:
             value = StudioTurn(kind="card", card=self.card, answer=None, observations=[])
         return value.model_dump_json(), {
             "seconds": 0.1,
+            "first_event_seconds": 0.01,
+            "first_output_seconds": 0.08,
             "usage": {"input_tokens": 100, "output_tokens": 50},
+            "usage_scope": "turn",
             "session_id": session_id or "11111111-1111-1111-1111-111111111111",
+        }
+
+    def compact(self, session_id, cancel):
+        self.inputs.append({"compact": session_id})
+        return {
+            "seconds": 0.05,
+            "first_event_seconds": 0.01,
+            "usage": {"input_tokens": 20, "output_tokens": 5},
+            "usage_scope": "turn",
+            "session_id": session_id,
         }
 
 
@@ -38,7 +57,22 @@ def capsule(**changes):
     return value
 
 
+def delta(scene=None, **changes):
+    return {
+        "scene": scene,
+        "changes": [
+            {"section": field, "operation": "add", "value": item}
+            for field, entries in changes.items()
+            for item in entries
+        ],
+    }
+
+
 def resolved_card(next_capsule=None):
+    next_capsule = next_capsule or capsule(
+        known=load_dossier()["initial_capsule"]["known"] + ["Иво знает общий план Дома"]
+    )
+    start = load_dossier()["initial_capsule"]
     return StudioCard.model_validate(
         {
             "interpretation": "Иво просит посмотреть карту.",
@@ -48,8 +82,10 @@ def resolved_card(next_capsule=None):
             "outcome": {
                 "read_aloud": "Сайрус разворачивает карту к Иво.",
                 "summary": "Иво изучил общий план Дома.",
-                "capsule_after": next_capsule
-                or capsule(known=load_dossier()["initial_capsule"]["known"] + ["Иво знает общий план Дома"]),
+                "capsule_delta": delta(
+                    scene=next_capsule["scene"] if next_capsule["scene"] != start["scene"] else None,
+                    known=[item for item in next_capsule["known"] if item not in start["known"]],
+                ),
                 "introduced_details": [],
             },
             "check": None,
@@ -58,7 +94,6 @@ def resolved_card(next_capsule=None):
 
 
 def checked_card():
-    start = load_dossier()["initial_capsule"]
     return StudioCard.model_validate(
         {
             "interpretation": "Иво вскрывает замок.",
@@ -75,16 +110,18 @@ def checked_card():
                 "success": {
                     "read_aloud": "Замок тихо поддаётся.",
                     "summary": "Служебная дверь открыта.",
-                    "capsule_after": capsule(
+                    "capsule_delta": delta(
                         scene="Иво снаружи у тихо открытой служебной двери.",
-                        known=start["known"] + ["Служебная дверь открыта"],
+                        known=["Служебная дверь открыта"],
                     ),
                     "introduced_details": ["У Дома есть служебная дверь"],
                 },
                 "failure": {
                     "read_aloud": "Отмычка срывается с громким щелчком.",
                     "summary": "Кто-то внутри мог услышать шум.",
-                    "capsule_after": capsule(threats=["Шум у служебной двери мог привлечь внимание"]),
+                    "capsule_delta": delta(
+                        threats=["Шум у служебной двери мог привлечь внимание"]
+                    ),
                     "introduced_details": ["У Дома есть служебная дверь"],
                 },
             },
@@ -236,3 +273,70 @@ def test_studio_reopens_when_private_request_is_null(tmp_path):
 
     reopened = GameStudio(tmp_path, provider)
     assert reopened.store.read()["assistant_pending"] is None
+
+
+def test_capsule_delta_is_applied_locally_without_repeating_unchanged_memory():
+    before = capsule(threats=["Стража настороже"])
+    change = delta(
+        scene="Иво вошёл в Дом.",
+        known=["Служебная дверь открыта"],
+    )
+    change["changes"].append(
+        {"section": "threats", "operation": "remove", "value": "Стража настороже"}
+    )
+    after = apply_capsule_delta(before, change)
+    assert after.scene == "Иво вошёл в Дом."
+    assert "Служебная дверь открыта" in after.known
+    assert after.threats == []
+    assert after.inventory == before["inventory"]
+
+
+def test_capsule_delta_rejects_conflicting_operations():
+    change = delta(known=["Противоречивый факт"])
+    change["changes"].append(
+        {"section": "known", "operation": "remove", "value": "Противоречивый факт"}
+    )
+    with pytest.raises(GameError, match="противоречива"):
+        apply_capsule_delta(capsule(), change)
+
+
+def test_scene_boundary_compacts_only_after_threshold_and_keeps_game_state(tmp_path):
+    next_capsule = capsule(scene="Иво вышел на улицу перед Домом.")
+    provider = StudioProvider(resolved_card(next_capsule))
+    studio = GameStudio(tmp_path, provider)
+    studio_command(studio, "new")
+
+    def age_conversation(state, db):
+        state["model_session_id"] = "11111111-1111-1111-1111-111111111111"
+        state["model_turns"] = COMPACT_AFTER_TURNS - 1
+        state["calls"].append(
+            {
+                "status": "completed",
+                "mode": "action",
+                "turn_usage": {"input_tokens": COMPACT_AFTER_INPUT_TOKENS},
+            }
+        )
+        return state
+
+    studio.store.mutate(uid(), None, age_conversation)
+    state = studio_command(studio, "submit", mode="action", text="Выхожу на улицу")
+    expected = deepcopy(state["pending"]["selected_outcome"])
+
+    def enlarge_latest_context(current, db):
+        current["calls"][-1]["turn_usage"]["input_tokens"] = COMPACT_AFTER_INPUT_TOKENS
+        return current
+
+    studio.store.mutate(uid(), None, enlarge_latest_context)
+    state = studio_command(
+        studio,
+        "accept",
+        text=expected["read_aloud"],
+        apply_capsule=True,
+        capsule=expected["capsule_after"],
+    )
+    assert state["capsule"]["scene"] == "Иво вышел на улицу перед Домом."
+    assert state["compaction"]["phase"] == "completed"
+    assert state["model_compacted_turns"] == COMPACT_AFTER_TURNS
+    assert provider.inputs[-1] == {"compact": "11111111-1111-1111-1111-111111111111"}
+    assert state["calls"][-1]["mode"] == "compact"
+    assert state["calls"][-1]["turn_usage"]["input_tokens"] == 20

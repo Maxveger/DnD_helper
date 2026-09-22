@@ -7,11 +7,11 @@ import threading
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .codex_provider import CodexProvider, output_schema
+from .codex_provider import CodexProvider
 from .engine import uid
 from .free_world import DEFAULT_MODEL, WORLD_MODELS
 from .rules import GameError, require
@@ -33,10 +33,26 @@ class Capsule(Strict):
     pending_intents: list[str] = Field(default_factory=list, max_length=20)
 
 
+MemoryEntry = Annotated[str, Field(min_length=1, max_length=700)]
+
+
+class MemoryChange(Strict):
+    section: Literal[
+        "hero", "inventory", "known", "commitments", "npcs", "threats", "pending_intents"
+    ]
+    operation: Literal["add", "remove"]
+    value: MemoryEntry
+
+
+class CapsuleDelta(Strict):
+    scene: str | None = Field(default=None, min_length=1, max_length=1200)
+    changes: list[MemoryChange] = Field(default_factory=list, max_length=30)
+
+
 class StudioOutcome(Strict):
     read_aloud: str = Field(max_length=2400)
     summary: str = Field(min_length=1, max_length=700)
-    capsule_after: Capsule
+    capsule_delta: CapsuleDelta
     introduced_details: list[str] = Field(default_factory=list, max_length=12)
 
 
@@ -94,14 +110,65 @@ card и оставь answer пустым. Всегда возвращай тол
 а при наступлении условия остановись и верни выбор. Добровольный взгляд в Око не является броском, если герой уже
 физически получил возможность: это решение игрока.
 
-Капсула после исхода — компактная точная память. Сохрани без изменений всё, что исход не меняет; не теряй предметы,
-знания, обещания и угрозы. Не записывай атмосферный цвет как постоянную истину. Существенную новую импровизацию
-перечисли в introduced_details: она станет каноном только после принятия человеком. read_aloud — только то, что
-можно прочитать игроку; секреты и основания оставь в gm_note. Не упоминай технические поля и JSON.
+capsule_delta — только изменение компактной памяти после исхода, а не полная капсула. scene=null, если ситуация
+не меняется; changes содержит только реальные операции add/remove над указанными секциями. Не повторяй неизменные
+записи и не записывай атмосферный цвет как постоянную истину. Существенную новую импровизацию перечисли в
+introduced_details: она станет каноном только после принятия человеком. read_aloud — только то, что можно прочитать
+игроку; секреты и основания оставь в gm_note. Не упоминай технические поля и JSON.
 
 Для stop=resolved или stop=question заполни outcome и оставь check пустым. Для stop=check заполни check и оставь
 outcome пустым. В Совете помогай понять ситуацию, NPC, ставки и честные решения, но не выбирай за игроков.
 В Мета анализируй качество пайплайна, память, границу модели и программы и замеченные дефекты."""
+
+
+COMPACT_AFTER_TURNS = 16
+COMPACT_AFTER_INPUT_TOKENS = 40_000
+
+
+def apply_capsule_delta(capsule, delta):
+    """Apply the model's small proposal locally; the model never writes authoritative state."""
+
+    before = Capsule.model_validate(capsule)
+    change = CapsuleDelta.model_validate(delta)
+    value = before.model_dump()
+    if change.scene is not None:
+        value["scene"] = change.scene
+    operations = [(item.section, item.operation, item.value) for item in change.changes]
+    require(len(operations) == len(set(operations)), "Дельта памяти содержит повторы.")
+    pairs = {(section, entry) for section, _operation, entry in operations}
+    require(
+        all(
+            not (
+                (section, "add", entry) in operations
+                and (section, "remove", entry) in operations
+            )
+            for section, entry in pairs
+        ),
+        "Дельта памяти противоречива.",
+    )
+    for item in change.changes:
+        current = value[item.section]
+        if item.operation == "remove":
+            value[item.section] = [entry for entry in current if entry != item.value]
+        elif item.value not in current:
+            current.append(item.value)
+    return Capsule.model_validate(value)
+
+
+def project_outcome(outcome, capsule):
+    value = outcome.model_dump()
+    value["capsule_after"] = apply_capsule_delta(capsule, outcome.capsule_delta).model_dump()
+    return value
+
+
+def project_card(card, capsule):
+    value = card.model_dump()
+    if card.outcome is not None:
+        value["outcome"] = project_outcome(card.outcome, capsule)
+    if card.check is not None:
+        value["check"]["success"] = project_outcome(card.check.success, capsule)
+        value["check"]["failure"] = project_outcome(card.check.failure, capsule)
+    return value
 
 
 def load_dossier():
@@ -123,6 +190,8 @@ def initial_state(dossier=None):
         "director_note": "",
         "model_session_id": None,
         "model_turns": 0,
+        "model_compacted_turns": 0,
+        "compaction": None,
         "model_updates": [],
         "remind_dossier": False,
         "calls": [],
@@ -143,11 +212,20 @@ class GameStudio:
         state = self.store.read()
         if state and any(
             key not in state
-            for key in ("model_session_id", "model_turns", "model_updates", "remind_dossier")
+            for key in (
+                "model_session_id",
+                "model_turns",
+                "model_compacted_turns",
+                "compaction",
+                "model_updates",
+                "remind_dossier",
+            )
         ):
             def migrate(current, db):
                 current.setdefault("model_session_id", None)
                 current.setdefault("model_turns", 0)
+                current.setdefault("model_compacted_turns", 0)
+                current.setdefault("compaction", None)
                 current.setdefault("model_updates", [])
                 current.setdefault("remind_dossier", False)
                 return current
@@ -169,6 +247,16 @@ class GameStudio:
                     phase="error", error="Приложение перезапущено. Повторите приватный вопрос."
                 ),
             )
+        state = self.store.read()
+        if state and (state.get("compaction") or {}).get("phase") == "planning":
+            def interrupted_compaction(current, db):
+                current["compaction"].update(
+                    phase="error",
+                    error="Сжатие было прервано перезапуском. Игра и капсула не изменены.",
+                )
+                return current
+
+            self.store.mutate(uid(), None, interrupted_compaction)
 
     def view(self):
         return {
@@ -286,6 +374,7 @@ class GameStudio:
                         if apply_capsule
                         else Capsule.model_validate(state["capsule"])
                     )
+                    old_scene = state["capsule"]["scene"]
                     before = deepcopy(state)
                     before["pending"] = None
                     db.execute(
@@ -323,6 +412,35 @@ class GameStudio:
                         }
                     )
                     state["model_updates"] = state["model_updates"][-12:]
+                    exact_resolved_draft = (
+                        pending["card"]["stop"] != "check"
+                        and text.strip() == outcome["read_aloud"].strip()
+                        and apply_capsule
+                    )
+                    turns_since_compaction = state.get("model_turns", 0) - state.get(
+                        "model_compacted_turns", 0
+                    )
+                    recent_input_tokens = next(
+                        (
+                            (item.get("turn_usage") or {}).get("input_tokens", 0)
+                            for item in reversed(state.get("calls", []))
+                            if item.get("status") == "completed" and item.get("mode") != "compact"
+                        ),
+                        0,
+                    )
+                    if (
+                        exact_resolved_draft
+                        and next_capsule.scene != old_scene
+                        and turns_since_compaction >= COMPACT_AFTER_TURNS
+                        and recent_input_tokens >= COMPACT_AFTER_INPUT_TOKENS
+                        and state.get("model_session_id")
+                    ):
+                        state["compaction"] = {
+                            "id": uid(),
+                            "phase": "planning",
+                            "after_turn": state.get("model_turns", 0),
+                        }
+                        run = "compact"
                 elif kind == "reject":
                     require(pending is not None, "Нет карточки для отклонения.")
                     state["model_updates"].append(
@@ -384,6 +502,8 @@ class GameStudio:
                     require(not pending and not assistant, "Сначала завершите текущий черновик или вопрос.")
                     state["model_session_id"] = None
                     state["model_turns"] = 0
+                    state["model_compacted_turns"] = 0
+                    state["compaction"] = None
                     state["model_updates"] = []
                     state["remind_dossier"] = False
                 elif kind == "undo":
@@ -399,6 +519,8 @@ class GameStudio:
                     restored["assistant_pending"] = None
                     restored["model_session_id"] = state.get("model_session_id")
                     restored["model_turns"] = state.get("model_turns", 0)
+                    restored["model_compacted_turns"] = state.get("model_compacted_turns", 0)
+                    restored["compaction"] = state.get("compaction")
                     restored["remind_dossier"] = state.get("remind_dossier", False)
                     restored["model_updates"] = state.get("model_updates", []) + [
                         {
@@ -422,7 +544,11 @@ class GameStudio:
                 self.cancel = threading.Event()
                 snapshot = deepcopy(result)
                 self.thread = threading.Thread(
-                    target=self._work_game if run == "game" else self._work_chat,
+                    target={
+                        "game": self._work_game,
+                        "chat": self._work_chat,
+                        "compact": self._work_compact,
+                    }[run],
                     args=(snapshot, self.cancel),
                     daemon=True,
                     name="studio-" + run,
@@ -450,8 +576,6 @@ class GameStudio:
             blocks.extend(
                 [
                     LIVE_STUDIO,
-                    "Договорённая JSON-схема ответа (изучи сейчас; в следующих ходах она не повторяется):\n"
-                    + json.dumps(output_schema(StudioTurn), ensure_ascii=False),
                     "Режиссёрское досье. Это служебная истина, не текст игрокам:\n"
                     + json.dumps(load_dossier(), ensure_ascii=False),
                     "Авторитетная капсула на старте этой модельной беседы:\n"
@@ -493,23 +617,26 @@ class GameStudio:
             if state and state["id"] == state_id:
                 usage = details.get("usage") or {}
                 session_id = details.get("session_id")
-                previous = next(
-                    (
-                        item.get("usage") or {}
-                        for item in reversed(state["calls"])
-                        if session_id and item.get("session_id") == session_id
-                    ),
-                    {},
-                )
-                turn_usage = {
-                    key: max(0, usage.get(key, 0) - previous.get(key, 0))
-                    for key in (
-                        "input_tokens",
-                        "cached_input_tokens",
-                        "output_tokens",
-                        "reasoning_output_tokens",
+                if details.get("usage_scope") == "turn":
+                    turn_usage = usage
+                else:
+                    previous = next(
+                        (
+                            item.get("usage") or {}
+                            for item in reversed(state["calls"])
+                            if session_id and item.get("session_id") == session_id
+                        ),
+                        {},
                     )
-                }
+                    turn_usage = {
+                        key: max(0, usage.get(key, 0) - previous.get(key, 0))
+                        for key in (
+                            "input_tokens",
+                            "cached_input_tokens",
+                            "output_tokens",
+                            "reasoning_output_tokens",
+                        )
+                    }
                 state["calls"].append(
                     {
                         "id": request_id,
@@ -546,9 +673,10 @@ class GameStudio:
                 "Помощник смешал проверку и готовый исход. Память не изменена.",
             )
             require(not cancel.is_set(), "Запрос отменён. Память не изменена.")
-            values = {"card": card.model_dump(), "phase": "check" if card.stop == "check" else "review"}
+            projected = project_card(card, state["capsule"])
+            values = {"card": projected, "phase": "check" if card.stop == "check" else "review"}
             if card.stop != "check":
-                values["selected_outcome"] = card.outcome.model_dump()
+                values["selected_outcome"] = projected["outcome"]
             def finish(current, db):
                 require(
                     current and current.get("pending") and current["pending"]["id"] == request_id,
@@ -627,6 +755,49 @@ class GameStudio:
                 pass
         finally:
             self._record_call(state["id"], request_id, request["mode"], details)
+
+    def _work_compact(self, state, cancel):
+        compaction = state.get("compaction") or {}
+        request_id = compaction.get("id")
+        details = {"status": "error"}
+        try:
+            require(request_id and state.get("model_session_id"), "Нет беседы для сжатия.")
+            details = self.provider.compact(state["model_session_id"], cancel)
+            require(not cancel.is_set(), "Сжатие памяти отменено.")
+
+            def finish(current, db):
+                require(
+                    current
+                    and current.get("compaction")
+                    and current["compaction"].get("id") == request_id,
+                    "Задача сжатия уже изменилась.",
+                )
+                current["model_compacted_turns"] = current.get("model_turns", 0)
+                current["compaction"].update(
+                    phase="completed",
+                    completed=time.time(),
+                    after_turn=current.get("model_turns", 0),
+                )
+                return current
+
+            self.store.mutate(uid(), None, finish)
+            details["status"] = "completed"
+        except Exception as exc:
+            details["status"] = "error"
+            message = str(exc) if isinstance(exc, GameError) else "Не удалось сжать беседу. Игра не изменена."
+
+            def fail(current, db):
+                if (
+                    current
+                    and current.get("compaction")
+                    and current["compaction"].get("id") == request_id
+                ):
+                    current["compaction"].update(phase="error", error=message)
+                return current
+
+            self.store.mutate(uid(), None, fail)
+        finally:
+            self._record_call(state["id"], request_id or uid(), "compact", details)
 
     def close(self):
         self.cancel.set()

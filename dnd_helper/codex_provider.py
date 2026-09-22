@@ -2,6 +2,7 @@
 
 import json
 import os
+import queue
 import re
 import tomllib
 import shutil
@@ -93,6 +94,18 @@ class CodexProvider:
         self.timeout = timeout
         self.lock = threading.Lock()
         self.login_process = None
+        self.app_process = None
+        self.app_temp = None
+        self.app_reader = None
+        self.app_stderr_reader = None
+        self.app_pending = {}
+        self.app_pending_lock = threading.Lock()
+        self.app_write_lock = threading.Lock()
+        self.app_next_id = 1
+        self.app_threads = set()
+        self.app_capture = None
+        self.app_stderr = []
+        self.app_failure = None
 
     def binary(self):
         path = self.executable or os.environ.get("DND_CODEX_BINARY") or shutil.which("codex")
@@ -199,6 +212,236 @@ class CodexProvider:
     def close(self):
         if self.login_process:
             self.terminate(self.login_process)
+        self._close_app_server()
+
+    def _close_app_server(self):
+        process, self.app_process = self.app_process, None
+        if process:
+            self.terminate(process)
+        self.app_threads.clear()
+        self.app_capture = None
+        with self.app_pending_lock:
+            for waiting in self.app_pending.values():
+                waiting.put({"error": {"message": "Codex App Server остановлен."}})
+            self.app_pending.clear()
+        if self.app_temp:
+            self.app_temp.cleanup()
+            self.app_temp = None
+
+    @staticmethod
+    def _usage(value):
+        value = value or {}
+        return {
+            "input_tokens": value.get("inputTokens", value.get("input_tokens", 0)),
+            "cached_input_tokens": value.get("cachedInputTokens", value.get("cached_input_tokens", 0)),
+            "cache_write_input_tokens": value.get(
+                "cacheWriteInputTokens", value.get("cache_write_input_tokens", 0)
+            ),
+            "output_tokens": value.get("outputTokens", value.get("output_tokens", 0)),
+            "reasoning_output_tokens": value.get(
+                "reasoningOutputTokens", value.get("reasoning_output_tokens", 0)
+            ),
+            "total_tokens": value.get("totalTokens", value.get("total_tokens", 0)),
+        }
+
+    def _app_stderr_loop(self, process):
+        try:
+            for line in process.stderr:
+                self.app_stderr.append(line.rstrip())
+                del self.app_stderr[:-40]
+        except (OSError, ValueError):
+            pass
+
+    def _app_reader_loop(self, process):
+        try:
+            for line in process.stdout:
+                try:
+                    event = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                request_id = event.get("id")
+                method = event.get("method")
+                if request_id is not None and not method:
+                    with self.app_pending_lock:
+                        waiting = self.app_pending.get(request_id)
+                    if waiting:
+                        waiting.put(event)
+                    continue
+                if request_id is not None and method:
+                    # Tools and approvals are disabled. Refuse any unexpected server request.
+                    self._app_write(
+                        {
+                            "id": request_id,
+                            "error": {"code": -32601, "message": "Unsupported server request"},
+                        }
+                    )
+                    capture = self.app_capture
+                    if capture:
+                        capture["protocol_error"] = "Codex запросил недоступный инструмент."
+                    continue
+                if method:
+                    self._app_notification(method, event.get("params") or {})
+        except (OSError, ValueError, GameError):
+            pass
+        finally:
+            if self.app_process is process and process.poll() is not None:
+                self.app_failure = "Codex App Server неожиданно остановился."
+                with self.app_pending_lock:
+                    for waiting in self.app_pending.values():
+                        waiting.put({"error": {"message": self.app_failure}})
+
+    def _app_notification(self, method, params):
+        capture = self.app_capture
+        if not capture or params.get("threadId") != capture.get("thread_id"):
+            return
+        now = time.monotonic()
+        capture.setdefault("first_event_at", now)
+        turn = params.get("turn") or {}
+        if method == "turn/started":
+            capture["turn_id"] = turn.get("id") or capture.get("turn_id")
+        elif method == "item/agentMessage/delta":
+            capture.setdefault("first_output_at", now)
+        elif method in {"item/started", "item/completed"}:
+            item = params.get("item") or {}
+            item_type = item.get("type")
+            if method == "item/completed" and item_type == "agentMessage":
+                capture["text"] = item.get("text", "")
+                capture.setdefault("first_output_at", now)
+                if len(capture["text"]) > 2_000_000:
+                    capture["protocol_error"] = "Ответ Codex слишком большой. Ответ отклонён."
+            elif item_type not in {"userMessage", "reasoning", "plan", "contextCompaction"}:
+                if item_type != "agentMessage":
+                    capture["protocol_error"] = "Codex попытался использовать инструмент. Ответ отклонён."
+        elif method == "thread/tokenUsage/updated":
+            token_usage = params.get("tokenUsage") or {}
+            capture["usage"] = self._usage(token_usage.get("last"))
+            capture["total_usage"] = self._usage(token_usage.get("total"))
+        elif method == "turn/completed":
+            capture["turn_id"] = turn.get("id") or capture.get("turn_id")
+            capture["turn_status"] = turn.get("status")
+            capture["turn_error"] = turn.get("error")
+            capture["done"].set()
+
+    def _app_write(self, value):
+        process = self.app_process
+        if not process or process.poll() is not None or not process.stdin:
+            raise GameError("Codex App Server недоступен. Повторите запрос.")
+        data = json.dumps(value, ensure_ascii=False) + "\n"
+        with self.app_write_lock:
+            process.stdin.write(data)
+            process.stdin.flush()
+
+    def _app_rpc(self, method, params, cancel=None, timeout=None):
+        request_id = self.app_next_id
+        self.app_next_id += 1
+        waiting = queue.Queue(maxsize=1)
+        with self.app_pending_lock:
+            self.app_pending[request_id] = waiting
+        try:
+            self._app_write({"method": method, "id": request_id, "params": params})
+            deadline = time.monotonic() + (timeout or self.timeout)
+            while True:
+                if cancel and cancel.is_set():
+                    raise GameError("Запрос отменён. Мир не изменён.")
+                if time.monotonic() >= deadline:
+                    raise GameError("Codex App Server не ответил вовремя.")
+                try:
+                    response = waiting.get(timeout=0.1)
+                    break
+                except queue.Empty:
+                    if not self.app_process or self.app_process.poll() is not None:
+                        raise GameError("Codex App Server неожиданно остановился.")
+            if response.get("error"):
+                self.app_failure = response["error"]
+                message = json.dumps(response["error"], ensure_ascii=False).lower()
+                if any(x in message for x in ("usage limit", "rate limit", "quota", "usage_limit")):
+                    raise GameError("Лимит Codex исчерпан. Сохранение доступно; повторите позже.")
+                if "invalid_json_schema" in message:
+                    raise GameError("Codex не принял схему ответа. Требуется исправление адаптера.")
+                raise GameError("Codex App Server отклонил запрос. Проверьте вход и выбранную модель.")
+            return response.get("result") or {}
+        finally:
+            with self.app_pending_lock:
+                self.app_pending.pop(request_id, None)
+
+    def _ensure_app_server(self):
+        if self.app_process and self.app_process.poll() is None:
+            return
+        self._close_app_server()
+        status = self.status()
+        if not status["ready"]:
+            raise GameError(status["message"])
+        self.app_temp = tempfile.TemporaryDirectory(prefix="dnd-codex-app-")
+        folder = self.app_temp.name
+        args = self.binary() + self.options(folder) + ["app-server", "--stdio"]
+        self.app_failure = None
+        self.app_stderr = []
+        self.app_process = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+            cwd=folder,
+            env=self.environment(),
+            **self.process_options(),
+        )
+        self.app_reader = threading.Thread(
+            target=self._app_reader_loop,
+            args=(self.app_process,),
+            daemon=True,
+            name="codex-app-reader",
+        )
+        self.app_stderr_reader = threading.Thread(
+            target=self._app_stderr_loop,
+            args=(self.app_process,),
+            daemon=True,
+            name="codex-app-stderr",
+        )
+        self.app_reader.start()
+        self.app_stderr_reader.start()
+        self._app_rpc(
+            "initialize",
+            {"clientInfo": {"name": "dnd-helper", "version": "0.1.0"}},
+            timeout=15,
+        )
+        self._app_write({"method": "initialized", "params": {}})
+
+    def _ensure_app_thread(self, session_id, model):
+        if session_id and session_id in self.app_threads:
+            return session_id
+        if session_id:
+            params = {
+                "threadId": session_id,
+                "cwd": self.app_temp.name,
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+                "developerInstructions": TEXT_ROLE,
+                "excludeTurns": True,
+            }
+            if model:
+                params["model"] = model
+            self._app_rpc("thread/resume", params, timeout=30)
+            self.app_threads.add(session_id)
+            return session_id
+        params = {
+            "cwd": self.app_temp.name,
+            "approvalPolicy": "never",
+            "sandbox": "read-only",
+            "developerInstructions": TEXT_ROLE,
+            "ephemeral": False,
+            "serviceName": "dnd-helper",
+        }
+        if model:
+            params["model"] = model
+        result = self._app_rpc("thread/start", params, timeout=30)
+        returned = (result.get("thread") or {}).get("id")
+        if not returned:
+            raise GameError("Codex App Server не вернул ID живой беседы.")
+        self.app_threads.add(returned)
+        return returned
 
     def options(self, folder):
         settings = {
@@ -397,16 +640,122 @@ class CodexProvider:
         return value, details
 
     def conversation(self, prompt, cancel, model="", session_id=None, schema_class=None):
-        """Continue one saved Codex conversation without resending an output schema."""
+        """Continue one conversation through one persistent Codex App Server process."""
 
-        text, details = self._request(
-            prompt,
-            cancel,
-            model=model,
-            schema_data=output_schema(schema_class) if schema_class else None,
-            session_id=session_id,
-            persist=True,
-        )
-        if not text.strip():
-            raise GameError("Codex вернул пустой ответ. Память не изменена.")
-        return text, details
+        with self.lock:
+            self._ensure_app_server()
+            model = model or self.selected_model()
+            session_id = self._ensure_app_thread(session_id, model)
+            started = time.monotonic()
+            capture = {
+                "thread_id": session_id,
+                "done": threading.Event(),
+                "text": "",
+                "usage": {},
+            }
+            self.app_capture = capture
+            try:
+                params = {
+                    "threadId": session_id,
+                    "input": [{"type": "text", "text": prompt}],
+                    "cwd": self.app_temp.name,
+                    "approvalPolicy": "never",
+                    "sandboxPolicy": {"type": "readOnly"},
+                    "effort": "low",
+                }
+                if model:
+                    params["model"] = model
+                if schema_class:
+                    params["outputSchema"] = output_schema(schema_class)
+                result = self._app_rpc("turn/start", params, cancel=cancel)
+                capture["turn_id"] = (result.get("turn") or {}).get("id") or capture.get("turn_id")
+                interrupted = False
+                while not capture["done"].wait(0.1):
+                    elapsed = time.monotonic() - started
+                    if cancel.is_set() or elapsed > self.timeout:
+                        if capture.get("turn_id") and not interrupted:
+                            interrupted = True
+                            try:
+                                self._app_rpc(
+                                    "turn/interrupt",
+                                    {"threadId": session_id, "turnId": capture["turn_id"]},
+                                    timeout=5,
+                                )
+                            except GameError:
+                                pass
+                        if cancel.is_set():
+                            raise GameError("Запрос отменён. Мир не изменён.")
+                        raise GameError(
+                            "Codex не ответил вовремя. Можно повторить запрос или изменить действие."
+                        )
+                    if not self.app_process or self.app_process.poll() is not None:
+                        raise GameError("Codex App Server неожиданно остановился.")
+                if capture.get("protocol_error"):
+                    raise GameError(capture["protocol_error"])
+                if capture.get("turn_status") != "completed":
+                    error = json.dumps(capture.get("turn_error") or {}, ensure_ascii=False).lower()
+                    if any(x in error for x in ("usage limit", "rate limit", "quota", "usage_limit")):
+                        raise GameError("Лимит Codex исчерпан. Сохранение доступно; повторите позже.")
+                    raise GameError("Codex не завершил запрос. Проверьте вход и доступность модели.")
+                text = capture.get("text", "")
+                if not text.strip():
+                    raise GameError("Codex вернул пустой ответ. Память не изменена.")
+                completed = time.monotonic()
+                details = {
+                    "seconds": round(completed - started, 2),
+                    "first_event_seconds": round(capture["first_event_at"] - started, 2)
+                    if capture.get("first_event_at")
+                    else None,
+                    "first_output_seconds": round(capture["first_output_at"] - started, 2)
+                    if capture.get("first_output_at")
+                    else None,
+                    "usage": capture.get("usage") or {},
+                    "total_usage": capture.get("total_usage") or {},
+                    "usage_scope": "turn",
+                    "model": model or "Настройка Codex",
+                    "provider": "codex-app-server",
+                    "session_id": session_id,
+                }
+                return text, details
+            finally:
+                self.app_capture = None
+
+    def compact(self, session_id, cancel):
+        """Compact a loaded conversation between scenes; game state stays external and authoritative."""
+
+        with self.lock:
+            self._ensure_app_server()
+            session_id = self._ensure_app_thread(session_id, "")
+            started = time.monotonic()
+            capture = {
+                "thread_id": session_id,
+                "done": threading.Event(),
+                "text": "",
+                "usage": {},
+            }
+            self.app_capture = capture
+            try:
+                self._app_rpc("thread/compact/start", {"threadId": session_id}, cancel=cancel)
+                while not capture["done"].wait(0.1):
+                    if cancel.is_set():
+                        raise GameError("Сжатие памяти отменено.")
+                    if time.monotonic() - started > self.timeout:
+                        raise GameError("Сжатие памяти Codex не завершилось вовремя.")
+                    if not self.app_process or self.app_process.poll() is not None:
+                        raise GameError("Codex App Server неожиданно остановился.")
+                if capture.get("turn_status") != "completed":
+                    raise GameError("Codex не завершил сжатие беседы.")
+                completed = time.monotonic()
+                return {
+                    "seconds": round(completed - started, 2),
+                    "first_event_seconds": round(capture["first_event_at"] - started, 2)
+                    if capture.get("first_event_at")
+                    else None,
+                    "usage": capture.get("usage") or {},
+                    "total_usage": capture.get("total_usage") or {},
+                    "usage_scope": "turn",
+                    "provider": "codex-app-server",
+                    "session_id": session_id,
+                }
+            finally:
+                self.app_capture = None

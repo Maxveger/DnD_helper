@@ -24,6 +24,38 @@ if "--version" in args:
  print("codex-cli 0.154.0");sys.exit()
 if "login" in args:
  print("Logged in using " + ("API key: secret-marker" if mode=="api" else "ChatGPT"));sys.exit()
+if "app-server" in args:
+ thread="11111111-1111-1111-1111-111111111111"
+ turn_count=0
+ def send(value): print(json.dumps(value),flush=True)
+ for line in sys.stdin:
+  request=json.loads(line);method=request.get("method");rid=request.get("id");params=request.get("params",{})
+  if method=="initialize": send({"id":rid,"result":{"userAgent":"fake"}})
+  elif method=="initialized": pass
+  elif method=="thread/start":
+   assert params["approvalPolicy"]=="never" and params["sandbox"]=="read-only"
+   send({"id":rid,"result":{"thread":{"id":thread}}})
+  elif method=="thread/resume": send({"id":rid,"result":{"thread":{"id":thread}}})
+  elif method=="turn/start":
+   turn_count+=1;turn=f"turn-{turn_count}"
+   if mode=="session": assert "outputSchema" not in params
+   if mode=="session_schema": assert "outputSchema" in params
+   assert params["sandboxPolicy"]=={"type":"readOnly"}
+   send({"id":rid,"result":{"turn":{"id":turn}}})
+   send({"method":"turn/started","params":{"threadId":thread,"turn":{"id":turn,"items":[],"status":"inProgress"}}})
+   send({"method":"item/agentMessage/delta","params":{"threadId":thread,"turnId":turn,"itemId":"answer","delta":"{"}})
+   answer="not json" if mode=="bad_session" else json.dumps({"text":"Привет"})
+   send({"method":"item/completed","params":{"threadId":thread,"turnId":turn,"completedAtMs":1,"item":{"id":"answer","type":"agentMessage","text":answer}}})
+   usage={"inputTokens":9,"cachedInputTokens":4,"cacheWriteInputTokens":0,"outputTokens":3,"reasoningOutputTokens":1,"totalTokens":13}
+   send({"method":"thread/tokenUsage/updated","params":{"threadId":thread,"turnId":turn,"tokenUsage":{"last":usage,"total":usage,"modelContextWindow":200000}}})
+   send({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":turn,"items":[],"status":"completed"}}})
+  elif method=="thread/compact/start":
+   turn="compact-1";send({"id":rid,"result":{}})
+   send({"method":"turn/started","params":{"threadId":thread,"turn":{"id":turn,"items":[],"status":"inProgress"}}})
+   send({"method":"item/completed","params":{"threadId":thread,"turnId":turn,"completedAtMs":1,"item":{"id":"compact","type":"contextCompaction"}}})
+   send({"method":"turn/completed","params":{"threadId":thread,"turn":{"id":turn,"items":[],"status":"completed"}}})
+  elif method=="turn/interrupt": send({"id":rid,"result":{}})
+ sys.exit()
 prompt=sys.stdin.read()
 assert prompt and args[-1]=="-"
 assert "--ignore-user-config" in args
@@ -58,7 +90,9 @@ if mode!="incomplete":print(json.dumps({"type":"turn.completed","usage":{"input_
         def binary(self):
             return [sys.executable, str(script)]
 
-    return TestProvider(timeout=0.5)
+    value = TestProvider(timeout=0.5)
+    yield value
+    value.close()
 
 
 def test_codex_stdin_schema_usage_no_api_and_no_shell(provider, tmp_path, monkeypatch):
@@ -73,11 +107,12 @@ def test_codex_stdin_schema_usage_no_api_and_no_shell(provider, tmp_path, monkey
     assert provider.status()["ready"]
 
 
-def test_codex_conversation_persists_and_resumes_without_resending_schema(provider, monkeypatch):
+def test_codex_conversation_reuses_one_app_server_process_and_thread(provider, monkeypatch):
     monkeypatch.setenv("DND_TEST_MODE", "session")
     text, first = provider.conversation("Первый ход", threading.Event())
     assert Reply.model_validate_json(text).text == "Привет"
     assert first["session_id"] == "11111111-1111-1111-1111-111111111111"
+    process_id = provider.app_process.pid
 
     text, second = provider.conversation(
         "Следующий ход",
@@ -86,6 +121,12 @@ def test_codex_conversation_persists_and_resumes_without_resending_schema(provid
     )
     assert Reply.model_validate_json(text).text == "Привет"
     assert second["session_id"] == first["session_id"]
+    assert provider.app_process.pid == process_id
+    assert second["provider"] == "codex-app-server"
+    assert second["usage_scope"] == "turn"
+    assert second["usage"]["cached_input_tokens"] == 4
+    assert second["first_event_seconds"] is not None
+    assert second["first_output_seconds"] is not None
 
 
 def test_codex_conversation_can_enforce_schema_for_bootstrap_or_explicit_retry(provider, monkeypatch):
@@ -97,6 +138,14 @@ def test_codex_conversation_can_enforce_schema_for_bootstrap_or_explicit_retry(p
     )
     assert Reply.model_validate_json(text).text == "Привет"
     assert details["session_id"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_codex_app_server_compacts_loaded_thread(provider, monkeypatch):
+    monkeypatch.setenv("DND_TEST_MODE", "session")
+    _, details = provider.conversation("Первый ход", threading.Event())
+    compact = provider.compact(details["session_id"], threading.Event())
+    assert compact["provider"] == "codex-app-server"
+    assert compact["first_event_seconds"] is not None
 
 
 @pytest.mark.parametrize(

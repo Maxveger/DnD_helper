@@ -5,13 +5,12 @@ import socket
 import tempfile
 import threading
 import time
-from copy import deepcopy
 from pathlib import Path
 
 import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
-from dnd_helper.studio import StudioCard, StudioTurn, load_dossier
+from dnd_helper.studio import StudioCard, StudioTurn
 from dnd_helper.web import create_app
 
 
@@ -37,8 +36,6 @@ class Stub:
                 observations=["Совет не меняет принятую память."],
             )
         else:
-            capsule = deepcopy(load_dossier()["initial_capsule"])
-            capsule["known"].append("Иво запомнил общий план Дома")
             turn = StudioTurn(
                 kind="card",
                 card=StudioCard.model_validate(
@@ -50,7 +47,16 @@ class Stub:
                         "outcome": {
                             "read_aloud": "Сайрус поворачивает лист. На нём отмечены вход, канцелярия, архив и решётка реликвария.",
                             "summary": "Иво изучил общий план Дома.",
-                            "capsule_after": capsule,
+                            "capsule_delta": {
+                                "scene": None,
+                                "changes": [
+                                    {
+                                        "section": "known",
+                                        "operation": "add",
+                                        "value": "Иво запомнил общий план Дома",
+                                    }
+                                ],
+                            },
                             "introduced_details": [],
                         },
                         "check": None,
