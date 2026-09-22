@@ -62,7 +62,7 @@ class CapsuleDelta(Strict):
 
 
 class StudioOutcome(Strict):
-    read_aloud: str = Field(max_length=2400)
+    read_aloud: str = Field(min_length=1, max_length=2400)
     summary: str = Field(min_length=1, max_length=700)
     capsule_delta: CapsuleDelta
     introduced_details: list[str] = Field(default_factory=list, max_length=12)
@@ -137,9 +137,12 @@ card и оставь answer пустым. Всегда возвращай тол
 (например, «не убивать») обязательны и при неудаче. Натуральная единица не создаёт отдельной катастрофы.
 
 Составное намерение разрешай по порядку: безопасная подготовка может произойти в обеих ветках, зависимое продолжение
-происходит только после нужного успеха. Условное будущее намерение не исполняй сейчас: запиши его в pending_intents,
-а при наступлении условия остановись и верни выбор. Добровольный взгляд в Око не является броском, если герой уже
-физически получил возможность: это решение игрока.
+происходит только после нужного успеха. Если безопасная физическая часть уже выполнена до рискованной (например,
+герой вышел из комнаты перед попыткой скрыться), отрази её одинаковой сменой scene в обеих ветках. У каждой ветки
+проверки обязательны непустой read_aloud и хотя бы одно авторитетное изменение: scene либо changes. Не назначай
+проверку, если её ветви не создают разных последствий. Условное будущее намерение не исполняй сейчас: запиши его в
+pending_intents, а при наступлении условия остановись и верни выбор. Добровольный взгляд в Око не является броском,
+если герой уже физически получил возможность: это решение игрока.
 
 capsule_delta — только изменение компактной памяти после исхода, а не полная капсула. scene=null, если ситуация
 не меняется; changes содержит только реальные операции add/remove над указанными секциями. Не повторяй неизменные
@@ -535,7 +538,10 @@ class GameStudio:
                 elif kind == "accept":
                     require(pending and pending["phase"] == "review", "Нет карточки для принятия.")
                     text = data.get("text", "")
-                    require(isinstance(text, str) and len(text) <= 3000, "Текст: до 3000 символов.")
+                    require(
+                        isinstance(text, str) and 0 < len(text.strip()) <= 3000,
+                        "Текст: от 1 до 3000 символов.",
+                    )
                     apply_capsule = data.get("apply_capsule", True)
                     require(type(apply_capsule) is bool, "Неверный выбор памяти.")
                     next_capsule = (
@@ -997,6 +1003,15 @@ class GameStudio:
                 or (card.stop != "check" and card.outcome is not None and card.check is None),
                 "Помощник смешал проверку и готовый исход. Память не изменена.",
             )
+            if card.stop == "check":
+                require(
+                    all(
+                        outcome.capsule_delta.scene is not None
+                        or bool(outcome.capsule_delta.changes)
+                        for outcome in (card.check.success, card.check.failure)
+                    ),
+                    "Каждая ветка проверки должна менять положение или память. Память не изменена.",
+                )
             require(not cancel.is_set(), "Запрос отменён. Память не изменена.")
             projected = project_card(card, state["capsule"])
             values = {"card": projected, "phase": "check" if card.stop == "check" else "review"}

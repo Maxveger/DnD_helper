@@ -12,6 +12,7 @@ from dnd_helper.studio import (
     GameStudio,
     StudioCard,
     StudioChatReply,
+    StudioOutcome,
     StudioTurn,
     apply_capsule_delta,
     director_signals,
@@ -243,6 +244,45 @@ def test_roll_is_local_and_selects_model_prepared_branch(tmp_path):
     )
     assert state["capsule"] == before
     assert state["events"][0]["memory_applied"] is False
+
+
+def test_outcome_rejects_empty_read_aloud():
+    with pytest.raises(ValueError):
+        StudioOutcome.model_validate(
+            {
+                "read_aloud": "",
+                "summary": "Иво сменил позицию.",
+                "capsule_delta": delta(scene="Иво снаружи у таверны."),
+                "introduced_details": [],
+            }
+        )
+
+
+def test_check_rejects_branch_without_authoritative_change(tmp_path):
+    card = checked_card().model_copy(deep=True)
+    card.check.success.capsule_delta = type(card.check.success.capsule_delta)()
+    studio = GameStudio(tmp_path, StudioProvider(card))
+    studio_command(studio, "new")
+
+    state = studio_command(studio, "submit", mode="action", text="Выхожу и скрываюсь в тени")
+
+    assert state["pending"]["phase"] == "error"
+    assert "Каждая ветка проверки должна менять положение или память" in state["pending"]["error"]
+    assert state["events"] == []
+    assert state["capsule"] == capsule()
+
+
+def test_accept_rejects_empty_spoken_text(tmp_path):
+    studio = GameStudio(tmp_path, StudioProvider(resolved_card()))
+    studio_command(studio, "new")
+    state = studio_command(studio, "submit", mode="action", text="Позволь взглянуть на карту")
+
+    with pytest.raises(GameError, match="от 1 до 3000"):
+        studio.command("accept", {"text": "   "}, uid(), state["revision"])
+
+    state = studio.store.read()
+    assert state["pending"]["phase"] == "review"
+    assert state["events"] == []
 
 
 def test_advice_and_meta_are_private_and_do_not_change_game(tmp_path):
