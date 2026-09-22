@@ -34,30 +34,38 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class Capsule(Strict):
+class Handoff(Strict):
+    kind: Literal["decision", "direct_question", "imminent_threat", "scene_end"]
+    reason: str = Field(min_length=1, max_length=700)
+
+
+class Situation(Strict):
     scene: str = Field(min_length=1, max_length=1200)
+    npcs: list[str] = Field(default_factory=list, max_length=30)
+    threats: list[str] = Field(default_factory=list, max_length=20)
+    active_intent: str | None = Field(default=None, min_length=1, max_length=900)
+    handoff: Handoff
+
+
+class Capsule(Strict):
+    situation: Situation
     hero: list[str] = Field(default_factory=list, max_length=20)
     inventory: list[str] = Field(default_factory=list, max_length=30)
     known: list[str] = Field(default_factory=list, max_length=40)
     commitments: list[str] = Field(default_factory=list, max_length=30)
-    npcs: list[str] = Field(default_factory=list, max_length=30)
-    threats: list[str] = Field(default_factory=list, max_length=30)
-    pending_intents: list[str] = Field(default_factory=list, max_length=20)
 
 
 MemoryEntry = Annotated[str, Field(min_length=1, max_length=700)]
 
 
 class MemoryChange(Strict):
-    section: Literal[
-        "hero", "inventory", "known", "commitments", "npcs", "threats", "pending_intents"
-    ]
+    section: Literal["hero", "inventory", "known", "commitments"]
     operation: Literal["add", "remove"]
     value: MemoryEntry
 
 
 class CapsuleDelta(Strict):
-    scene: str | None = Field(default=None, min_length=1, max_length=1200)
+    situation: Situation
     changes: list[MemoryChange] = Field(default_factory=list, max_length=30)
 
 
@@ -139,24 +147,31 @@ card и оставь answer пустым. Всегда возвращай тол
 (например, «не убивать») обязательны и при неудаче. Натуральная единица не создаёт отдельной катастрофы.
 
 Составное намерение разрешай по порядку: безопасная подготовка может произойти в обеих ветках, зависимое продолжение
-происходит только после нужного успеха. Если безопасная физическая часть уже выполнена до рискованной (например,
-герой вышел из комнаты перед попыткой скрыться), отрази её одинаковой сменой scene в обеих ветках. У каждой ветки
-проверки обязательны непустой read_aloud и хотя бы одно авторитетное изменение: scene либо changes. Не назначай
-проверку, если её ветви не создают разных последствий. Условное будущее намерение не исполняй сейчас: запиши его в
-pending_intents, а при наступлении условия остановись и верни выбор. Добровольный взгляд в Око не является броском,
-если герой уже физически получил возможность: это решение игрока.
+происходит только после нужного успеха. Не назначай проверку, если её ветви не создают разных последствий. Если герой
+заявил продолжительное намерение («жду и наблюдаю», «иду за ним, пока меня не заметят»), проведи внутри одного ответа
+все безопасные реакции мира и NPC до заранее понятного условия остановки. Сохрани ещё действующее намерение в
+situation.active_intent вместе с условием остановки; не заставляй игрока повторять «жду» или «продолжаю». Добровольный
+взгляд в Око не является броском, если герой уже физически получил возможность: это решение игрока.
 
 Разрешай уже заявленное действие до первого нового содержательного выбора игрока, а не до ближайшего физического
-микрошага. Если герой вышел, спрятался и наблюдает, не останавливайся только на укрытии: покажи конкретный доступный
-результат наблюдения, если новое препятствие не прервало последовательность. Если текст говорит, что герой успел
-заглянуть, обязательно скажи, что именно он увидел. Провал может ограничить сведения и добавить цену, но результат
-оплаченного риска должен быть конкретным и менять доступное игроку решение.
+микрошага. Промежуточные перемещения, ожидание и естественные ответы NPC — части одного ответа, а не поводы вернуть
+ход. Если герой спрятался и наблюдает, покажи конкретный результат наблюдения или доведи реакцию мира до реальной
+развилки. Если текст говорит, что герой успел заглянуть, обязательно скажи, что именно он увидел. Провал может
+ограничить сведения и добавить цену, но результат оплаченного риска должен быть конкретным.
 
-capsule_delta — только изменение компактной памяти после исхода, а не полная капсула. scene=null, если ситуация
-не меняется; changes содержит только реальные операции add/remove над указанными секциями. Не повторяй неизменные
-записи и не записывай атмосферный цвет как постоянную истину. Существенную новую импровизацию перечисли в
-introduced_details: она станет каноном только после принятия человеком. read_aloud — только то, что можно прочитать
-игроку; секреты и основания оставь в gm_note. Не упоминай технические поля и JSON.
+Каждый исход обязан закончиться честной передачей управления. situation.handoff.kind указывает причину: decision —
+появился новый осмысленный выбор; direct_question — NPC требует ответа героя; imminent_threat — немедленная опасность,
+реакцию на которую нельзя выбрать за героя; scene_end — сцена действительно завершилась. В handoff.reason назови
+конкретно, что теперь должен решить игрок. Нельзя передавать ход только потому, что NPC ещё что-то делает, герой ждёт,
+прошёл один такт времени или удобнее продолжить следующим ответом.
+
+capsule_delta.situation — полный снимок динамической ситуации в точке передачи управления, он целиком заменит прежний:
+scene описывает текущее место и положение; npcs — только присутствующих или прямо действующих сейчас NPC; threats —
+только ещё актуальные непосредственные угрозы; active_intent — только продолжающая действовать заявка героя или null.
+Не накапливай там историю. changes содержит только реальные add/remove для долгой памяти hero, inventory, known и
+commitments. Не повторяй неизменные записи и не записывай атмосферный цвет как постоянную истину. Существенную новую
+импровизацию перечисли в introduced_details: она станет каноном только после принятия человеком. read_aloud — только
+то, что можно прочитать игроку; секреты и основания оставь в gm_note. Не упоминай технические поля и JSON.
 
 Для stop=resolved или stop=question заполни outcome и оставь check пустым. Для stop=check заполни check и оставь
 outcome пустым. В Совете помогай понять ситуацию, NPC, ставки и честные решения, но не выбирай за игроков.
@@ -169,9 +184,11 @@ DIRECTOR_OBSERVER = """Ты — отдельный режиссёрский ре
 не исправляй честный проигрыш и не пытайся обеспечить победу.
 
 Оцени именно текущий черновик ответа мира. Полностью ли он разрешает заявленное действие, а не останавливается после
-подготовительного микрошага? Получил ли игрок конкретный результат оплаченного риска? Заканчивается ли ответ новой
-содержательной информацией, угрозой или выбором? Согласованы ли текст, ставки и дельта памяти? При проверке оцени обе
-ветки, а после броска не предлагай менять характеристику, сложность или выпавший исход.
+подготовительного микрошага? Получил ли игрок конкретный результат оплаченного риска? Проверь указанную моделью
+situation.handoff: действительно ли названная причина требует нового решения игрока именно сейчас? Не является ли это
+маскировкой для «подожди ещё», «наблюдай дальше» или незаконченной реакции NPC? Согласованы ли текст, ставки, полный
+снимок situation и дельта долгой памяти? При проверке оцени обе ветки, а после броска не предлагай менять
+характеристику, сложность или выпавший исход.
 
 Не советуй, что теперь может или должен сделать герой: игрок уже выбрал действие, а следующий выбор принадлежит ему.
 Предлагай только способы, которыми ведущий может отредактировать текущий ответ мира:
@@ -197,20 +214,12 @@ DIRECTOR_PERIODIC_TURNS = 4
 
 
 def _progress_signature(capsule):
-    """Threat-only changes are pressure, not progress toward an informed new choice."""
+    """Diagnostic signature; handoff wording and pressure alone are not durable progress."""
 
     value = Capsule.model_validate(capsule)
     return tuple(
         json.dumps(getattr(value, key), ensure_ascii=False, sort_keys=True)
-        for key in (
-            "scene",
-            "hero",
-            "inventory",
-            "known",
-            "commitments",
-            "npcs",
-            "pending_intents",
-        )
+        for key in ("hero", "inventory", "known", "commitments")
     )
 
 
@@ -242,14 +251,6 @@ def director_signals(state):
     if failure_streak >= 2:
         signals.append(f"{failure_streak} проверок подряд закончились неудачей")
 
-    no_progress = 0
-    for item in reversed(events):
-        if item.get("meaningful_progress", True):
-            break
-        no_progress += 1
-    if no_progress >= 3:
-        signals.append(f"{no_progress} принятых ходов подряд не изменили доступный выбор")
-
     if events and _same_intent(pending.get("input", ""), events[-1].get("input", "")):
         signals.append("текущая заявка семантически похожа на предыдущую")
 
@@ -268,8 +269,7 @@ def apply_capsule_delta(capsule, delta):
     before = Capsule.model_validate(capsule)
     change = CapsuleDelta.model_validate(delta)
     value = before.model_dump()
-    if change.scene is not None:
-        value["scene"] = change.scene
+    value["situation"] = change.situation.model_dump()
     operations = [(item.section, item.operation, item.value) for item in change.changes]
     require(len(operations) == len(set(operations)), "Дельта памяти содержит повторы.")
     pairs = {(section, entry) for section, _operation, entry in operations}
@@ -313,12 +313,39 @@ def load_dossier():
     return json.loads(path.read_text("utf-8"))
 
 
+def upgrade_capsule(capsule):
+    """Upgrade the former mixed snapshot/log without inventing volatile present facts."""
+
+    if "situation" in capsule:
+        return Capsule.model_validate(capsule).model_dump()
+    active = capsule.get("pending_intents") or []
+    value = {
+        "situation": {
+            "scene": capsule.get("scene") or "Текущая ситуация требует уточнения ведущего.",
+            # The old lists accumulated stale positions and past threats. Keeping them would
+            # turn known bad cache into present-tense canon, so the new thread reconstructs it.
+            "npcs": [],
+            "threats": [],
+            "active_intent": "; ".join(active) if active else None,
+            "handoff": {
+                "kind": "decision",
+                "reason": "После обновления формата ведущий и игрок решают, как продолжить текущую сцену.",
+            },
+        },
+        **{
+            key: list(capsule.get(key) or [])
+            for key in ("hero", "inventory", "known", "commitments")
+        },
+    }
+    return Capsule.model_validate(value).model_dump()
+
+
 def initial_state(dossier=None):
     dossier = dossier or load_dossier()
     return {
         "id": uid(),
         "dossier_id": dossier["id"],
-        "capsule": deepcopy(dossier["initial_capsule"]),
+        "capsule": Capsule.model_validate(dossier["initial_capsule"]).model_dump(),
         "transcript": [{"role": "gm", "text": dossier["opening"]}],
         "side_chat": [],
         "events": [],
@@ -359,6 +386,7 @@ class GameStudio:
         state = self.store.read()
         if state and (
             "director_note" in state
+            or "situation" not in (state.get("capsule") or {})
             or any(
                 key not in state
                 for key in (
@@ -376,6 +404,8 @@ class GameStudio:
             )
         ):
             def migrate(current, db):
+                old_capsule = "situation" not in (current.get("capsule") or {})
+                current["capsule"] = upgrade_capsule(current["capsule"])
                 current.setdefault("model_session_id", None)
                 current.setdefault("model_turns", 0)
                 current.setdefault("model_compacted_turns", 0)
@@ -392,6 +422,23 @@ class GameStudio:
                 ):
                     current["director"] = {"phase": "idle"}
                 current.pop("director_note", None)
+                if old_capsule:
+                    # The continuing model thread contains the former capsule contract.
+                    # Start a clean thread with accepted dialogue and upgraded authority.
+                    current["model_session_id"] = None
+                    current["model_turns"] = 0
+                    current["model_compacted_turns"] = 0
+                    current["compaction"] = None
+                    current["model_updates"] = []
+                    pending = current.get("pending")
+                    if pending and pending.get("card"):
+                        current["pending"] = {
+                            "id": pending["id"],
+                            "phase": "error",
+                            "input": pending.get("input", ""),
+                            "model": pending.get("model", DEFAULT_MODEL),
+                            "error": "Формат ситуации обновлён. Повторите запрос; канон не изменён.",
+                        }
                 return current
 
             self.store.mutate(uid(), None, migrate)
@@ -585,7 +632,7 @@ class GameStudio:
                         else Capsule.model_validate(state["capsule"])
                     )
                     old_capsule = deepcopy(state["capsule"])
-                    old_scene = old_capsule["scene"]
+                    old_scene = old_capsule["situation"]["scene"]
                     before = deepcopy(state)
                     before["pending"] = None
                     db.execute(
@@ -609,7 +656,9 @@ class GameStudio:
                             "memory_applied": apply_capsule,
                             "meaningful_progress": _progress_signature(old_capsule)
                             != _progress_signature(state["capsule"]),
-                            "scene_changed": old_scene != state["capsule"]["scene"],
+                            "scene_changed": old_scene
+                            != state["capsule"]["situation"]["scene"],
+                            "handoff": outcome["capsule_after"]["situation"]["handoff"],
                         }
                     )
                     state["pending"] = None
@@ -646,7 +695,7 @@ class GameStudio:
                     )
                     if (
                         exact_resolved_draft
-                        and next_capsule.scene != old_scene
+                        and next_capsule.situation.scene != old_scene
                         and turns_since_compaction >= COMPACT_AFTER_TURNS
                         and recent_input_tokens >= COMPACT_AFTER_INPUT_TOKENS
                         and state.get("model_session_id")
@@ -856,6 +905,7 @@ class GameStudio:
                     ).fetchone()
                     require(row is not None, "Нет принятого шага для отмены.")
                     restored = json.loads(row["body"])
+                    restored["capsule"] = upgrade_capsule(restored["capsule"])
                     restored["calls"] = state["calls"]
                     restored["side_chat"] = state["side_chat"]
                     restored["assistant_pending"] = None
@@ -1065,9 +1115,9 @@ class GameStudio:
                 "Текущая авторитетная капсула:\n"
                 + json.dumps(state["capsule"], ensure_ascii=False),
                 "Исправь карточку один раз, не расширяя полномочия героя и не меняя честное решение только ради "
-                "валидации. Верни StudioTurn для той же заявки. У каждой ветки проверки должны быть непустой "
-                "читаемый результат и реальное изменение scene либо changes. Уже выполненную безопасную часть "
-                "составного действия отрази в обеих ветках.",
+                "валидации. Верни StudioTurn для той же заявки. У каждого исхода должны быть непустой читаемый "
+                "результат, полный снимок situation и честная причина handoff. Уже выполненную безопасную часть "
+                "составного действия отрази в обеих ветках и доведи до следующего содержательного выбора.",
             ]
         )
 
@@ -1080,15 +1130,6 @@ class GameStudio:
             or (card.stop != "check" and card.outcome is not None and card.check is None),
             "Помощник смешал проверку и готовый исход. Память не изменена.",
         )
-        if card.stop == "check":
-            require(
-                all(
-                    outcome.capsule_delta.scene is not None
-                    or bool(outcome.capsule_delta.changes)
-                    for outcome in (card.check.success, card.check.failure)
-                ),
-                "Каждая ветка проверки должна менять положение или память. Память не изменена.",
-            )
         return card
 
     def _start_director_for_pending(self, pending_id):

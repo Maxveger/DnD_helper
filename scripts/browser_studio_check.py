@@ -75,7 +75,16 @@ class Stub:
                             ),
                             "summary": "Иво изучил общий план Дома.",
                             "capsule_delta": {
-                                "scene": None,
+                                "situation": {
+                                    "scene": "Задняя комната «Кривого гроша». Сайрус показывает Иво карту Дома.",
+                                    "npcs": ["Сайрус находится напротив Иво"],
+                                    "threats": [],
+                                    "active_intent": None,
+                                    "handoff": {
+                                        "kind": "decision",
+                                        "reason": "Иво увидел план и решает, что ещё уточнить у Сайруса.",
+                                    },
+                                },
                                 "changes": [
                                     {
                                         "section": "known",

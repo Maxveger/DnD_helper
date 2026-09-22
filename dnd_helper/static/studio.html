@@ -97,6 +97,12 @@
   <div class="dialog-heading"><h2 id="capsule-title">Исправить принятую память</h2><button data-close="capsule-dialog" aria-label="Закрыть память">✕</button></div>
   <p class="muted">Одна строка — один пункт. Это редактор ведущего, а не модельный запрос.</p>
   <label for="cap-scene">Текущая ситуация</label><textarea id="cap-scene" rows="3"></textarea>
+  <label for="cap-npcs">NPC, действующие сейчас</label><textarea id="cap-npcs" rows="3"></textarea>
+  <label for="cap-threats">Непосредственные угрозы</label><textarea id="cap-threats" rows="3"></textarea>
+  <label for="cap-active-intent">Продолжающееся намерение героя</label><textarea id="cap-active-intent" rows="2"></textarea>
+  <label for="cap-handoff-kind">Причина передачи хода</label>
+  <select id="cap-handoff-kind"><option value="decision">Новый выбор</option><option value="direct_question">Нужен ответ</option><option value="imminent_threat">Немедленная угроза</option><option value="scene_end">Сцена завершена</option></select>
+  <label for="cap-handoff-reason">Что именно теперь решает игрок</label><textarea id="cap-handoff-reason" rows="2"></textarea>
   <div id="capsule-fields"></div>
   <button id="save-capsule" class="primary">Сохранить память</button>
 </dialog>

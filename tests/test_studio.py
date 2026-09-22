@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 import threading
 
 import pytest
@@ -18,6 +19,7 @@ from dnd_helper.studio import (
     director_signals,
     initial_state,
     load_dossier,
+    upgrade_capsule,
     uid,
 )
 
@@ -70,13 +72,37 @@ class StudioProvider:
 
 def capsule(**changes):
     value = deepcopy(load_dossier()["initial_capsule"])
+    for key in ("scene", "npcs", "threats", "active_intent", "handoff"):
+        if key in changes:
+            value["situation"][key] = changes.pop(key)
     value.update(changes)
     return value
 
 
-def delta(scene=None, **changes):
+def delta(
+    scene=None,
+    npcs=None,
+    threats=None,
+    active_intent=None,
+    handoff_kind="decision",
+    handoff_reason="Игрок получил новый содержательный выбор.",
+    situation=None,
+    **changes,
+):
+    current = deepcopy(load_dossier()["initial_capsule"]["situation"])
+    if situation is not None:
+        current = deepcopy(situation)
+    else:
+        if scene is not None:
+            current["scene"] = scene
+        if npcs is not None:
+            current["npcs"] = npcs
+        if threats is not None:
+            current["threats"] = threats
+        current["active_intent"] = active_intent
+        current["handoff"] = {"kind": handoff_kind, "reason": handoff_reason}
     return {
-        "scene": scene,
+        "situation": current,
         "changes": [
             {"section": field, "operation": "add", "value": item}
             for field, entries in changes.items()
@@ -100,7 +126,7 @@ def resolved_card(next_capsule=None):
                 "read_aloud": "Сайрус разворачивает карту к Иво.",
                 "summary": "Иво изучил общий план Дома.",
                 "capsule_delta": delta(
-                    scene=next_capsule["scene"] if next_capsule["scene"] != start["scene"] else None,
+                    situation=next_capsule["situation"],
                     known=[item for item in next_capsule["known"] if item not in start["known"]],
                 ),
                 "introduced_details": [],
@@ -137,7 +163,10 @@ def checked_card():
                     "read_aloud": "Отмычка срывается с громким щелчком.",
                     "summary": "Кто-то внутри мог услышать шум.",
                     "capsule_delta": delta(
-                        threats=["Шум у служебной двери мог привлечь внимание"]
+                        scene="Иво у закрытой служебной двери Дома после громкого щелчка отмычки.",
+                        threats=["Шум у служебной двери мог привлечь внимание"],
+                        handoff_kind="imminent_threat",
+                        handoff_reason="Иво решает, как реагировать на возможное приближение людей внутри.",
                     ),
                     "introduced_details": ["У Дома есть служебная дверь"],
                 },
@@ -258,34 +287,28 @@ def test_outcome_rejects_empty_read_aloud():
         )
 
 
-def test_check_rejects_branch_without_authoritative_change(tmp_path):
-    card = checked_card().model_copy(deep=True)
-    card.check.success.capsule_delta = type(card.check.success.capsule_delta)()
-    studio = GameStudio(tmp_path, StudioProvider(card))
-    studio_command(studio, "new")
-
-    state = studio_command(studio, "submit", mode="action", text="Выхожу и скрываюсь в тени")
-
-    assert state["pending"]["phase"] == "error"
-    assert "Каждая ветка проверки должна менять положение или память" in state["pending"]["error"]
-    assert state["events"] == []
-    assert state["capsule"] == capsule()
+def test_outcome_rejects_missing_handoff():
+    value = resolved_card().outcome.model_dump()
+    value["capsule_delta"]["situation"].pop("handoff")
+    with pytest.raises(ValueError):
+        StudioOutcome.model_validate(value)
 
 
 def test_invalid_game_card_gets_one_narrow_automatic_repair(tmp_path):
-    invalid = checked_card().model_copy(deep=True)
-    invalid.check.success.capsule_delta = type(invalid.check.success.capsule_delta)()
-
     class RepairingProvider(StudioProvider):
         def __init__(self):
-            super().__init__(invalid)
+            super().__init__(checked_card())
             self.game_calls = 0
 
         def conversation(self, prompt, cancel, model="", session_id=None, schema_class=None):
+            text, details = super().conversation(prompt, cancel, model, session_id, schema_class)
+            if schema_class is StudioTurn and self.game_calls == 0:
+                value = json.loads(text)
+                value["card"]["check"]["success"]["capsule_delta"]["situation"].pop("handoff")
+                text = json.dumps(value)
             if schema_class is StudioTurn:
-                self.card = invalid if self.game_calls == 0 else checked_card()
                 self.game_calls += 1
-            return super().conversation(prompt, cancel, model, session_id, schema_class)
+            return text, details
 
     game = RepairingProvider()
     studio = GameStudio(tmp_path, game, observer_provider=StudioProvider())
@@ -362,7 +385,7 @@ def test_capsule_editor_is_generic_and_dossier_has_no_action_catalog(tmp_path):
     studio = GameStudio(tmp_path, StudioProvider(resolved_card()))
     state = studio_command(studio, "new")
     edited = deepcopy(state["capsule"])
-    edited["pending_intents"] = ["Когда Око откроется, Иво хочет решить, смотреть ли на него"]
+    edited["situation"]["active_intent"] = "Когда Око откроется, Иво решит, смотреть ли на него"
     state = studio_command(studio, "capsule", capsule=edited)
     assert state["capsule"] == edited
 
@@ -377,7 +400,7 @@ def test_initial_state_is_a_fresh_slice_not_a_saved_game():
     state = initial_state()
     assert state["events"] == []
     assert state["pending"] is None
-    assert state["capsule"]["scene"].startswith("Задняя комната")
+    assert state["capsule"]["situation"]["scene"].startswith("Задняя комната")
 
 
 def test_studio_reopens_when_private_request_is_null(tmp_path):
@@ -410,19 +433,52 @@ def test_old_next_turn_direction_is_removed_without_touching_game(tmp_path):
     assert state["transcript"] == before["transcript"]
 
 
+def test_old_capsule_migrates_stable_memory_and_drops_stale_dynamic_log(tmp_path):
+    studio = GameStudio(tmp_path, StudioProvider(resolved_card()))
+    state = studio_command(studio, "new")
+    old_capsule = {
+        "scene": "Архив. Морвен допрашивает Томаса, Иво скрыт между стеллажами.",
+        "hero": state["capsule"]["hero"],
+        "inventory": state["capsule"]["inventory"],
+        "known": state["capsule"]["known"] + ["Томас солгал страже"],
+        "commitments": state["capsule"]["commitments"],
+        "npcs": ["Сайрус всё ещё сидит напротив Иво"],
+        "threats": ["Давно прошедший шум у двери"],
+        "pending_intents": ["Иво продолжает скрытно наблюдать до прямой угрозы"],
+    }
+
+    def install_legacy(current, db):
+        current["capsule"] = old_capsule
+        current["model_session_id"] = "11111111-1111-1111-1111-111111111111"
+        current["model_turns"] = 12
+        return current
+
+    studio.store.mutate(uid(), None, install_legacy)
+    reopened = GameStudio(tmp_path, StudioProvider(resolved_card()))
+    migrated = reopened.store.read()
+
+    assert migrated["capsule"] == upgrade_capsule(old_capsule)
+    assert migrated["capsule"]["situation"]["npcs"] == []
+    assert migrated["capsule"]["situation"]["threats"] == []
+    assert migrated["capsule"]["situation"]["active_intent"].startswith("Иво продолжает")
+    assert "Томас солгал страже" in migrated["capsule"]["known"]
+    assert migrated["model_session_id"] is None
+    assert migrated["model_turns"] == 0
+
+
 def test_capsule_delta_is_applied_locally_without_repeating_unchanged_memory():
     before = capsule(threats=["Стража настороже"])
     change = delta(
         scene="Иво вошёл в Дом.",
+        npcs=["Писец Томас работает в канцелярии"],
+        threats=[],
         known=["Служебная дверь открыта"],
     )
-    change["changes"].append(
-        {"section": "threats", "operation": "remove", "value": "Стража настороже"}
-    )
     after = apply_capsule_delta(before, change)
-    assert after.scene == "Иво вошёл в Дом."
+    assert after.situation.scene == "Иво вошёл в Дом."
     assert "Служебная дверь открыта" in after.known
-    assert after.threats == []
+    assert after.situation.threats == []
+    assert after.situation.npcs == ["Писец Томас работает в канцелярии"]
     assert after.inventory == before["inventory"]
 
 
@@ -469,7 +525,7 @@ def test_scene_boundary_compacts_only_after_threshold_and_keeps_game_state(tmp_p
         apply_capsule=True,
         capsule=expected["capsule_after"],
     )
-    assert state["capsule"]["scene"] == "Иво вышел на улицу перед Домом."
+    assert state["capsule"]["situation"]["scene"] == "Иво вышел на улицу перед Домом."
     assert state["compaction"]["phase"] == "completed"
     assert state["model_compacted_turns"] == COMPACT_AFTER_TURNS
     assert provider.inputs[-1] == {"compact": "11111111-1111-1111-1111-111111111111"}
@@ -644,7 +700,7 @@ def test_director_signals_are_sparse_and_deterministic():
 
     state["events"] = state["events"][:3]
     signals = director_signals(state)
-    assert "3 принятых ходов подряд не изменили доступный выбор" in signals
+    assert not any("не изменили" in item for item in signals)
 
 
 def test_draft_after_four_unseen_turns_starts_background_review(tmp_path):
