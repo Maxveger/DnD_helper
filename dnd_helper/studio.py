@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -87,6 +88,25 @@ class StudioTurn(Strict):
     observations: list[str] = Field(default_factory=list, max_length=12)
 
 
+class DirectorMove(Strict):
+    kind: Literal["clarify", "highlight", "costly_progress", "ease_pressure"]
+    label: str = Field(min_length=1, max_length=90)
+    purpose: str = Field(min_length=1, max_length=500)
+    instruction: str = Field(min_length=1, max_length=700)
+    tradeoff: str = Field(min_length=1, max_length=500)
+    changes_canon: bool
+
+
+class DirectorPulse(Strict):
+    status: Literal["steady", "watch", "decision"]
+    observation: str = Field(min_length=1, max_length=800)
+    evidence: list[str] = Field(default_factory=list, max_length=8)
+    risk: str = Field(min_length=1, max_length=700)
+    urgency: Literal["low", "medium", "high"]
+    confidence: Literal["low", "medium", "high"]
+    moves: list[DirectorMove] = Field(default_factory=list, max_length=4)
+
+
 LIVE_STUDIO = """Ты — живая модель внутри IDE человека-ведущего настольной игры.
 Ты не компилятор сценария и не автономный мастер. Полное режиссёрское досье задаёт истины и характеры,
 капсула хранит только уже принятое, а эта беседа обеспечивает живую связность. Человек решает, что принять.
@@ -121,8 +141,93 @@ outcome пустым. В Совете помогай понять ситуаци
 В Мета анализируй качество пайплайна, память, границу модели и программы и замеченные дефекты."""
 
 
+DIRECTOR_OBSERVER = """Ты — отдельный режиссёрский наблюдатель при человеке-ведущем настольной игры.
+Ты не играешь мир, не пишешь реплики сцены, не выбираешь действие за игроков и ничего не меняешь самостоятельно.
+Игровая модель намеренно строгая; не исправляй честный проигрыш и не пытайся обеспечить победу.
+
+Оценивай процесс проведения только по подтверждённой игре: понятен ли выбор, движется ли положение, не повторяется ли
+одно намерение, соразмерно ли растёт давление, достаточно ли обозначен риск необратимого решения. Не объявляй эмоции
+игроков фактом. Ссылайся на наблюдаемые реплики, броски и изменения канона. Отличай трудную игру от непонятного тупика.
+
+Верни status=steady, если вмешательство не нужно; status=watch, если есть слабый сигнал, но лучше подождать;
+status=decision, только когда ведущему действительно полезно принять решение сейчас. Для steady и watch moves оставь
+пустым. Для decision предложи 1–3 разных хода ведущего. Предпочитай clarify и highlight: повторить уже известное или
+вывести существующую зацепку без готового ответа. costly_progress и ease_pressure предлагай редко, с явной ценой.
+
+Каждый move — не готовая художественная реплика, а одноразовое режиссёрское намерение для следующей игровой карточки.
+instruction должно сохранять уже случившиеся последствия, запрещать выбор за героя и точно ограничивать допустимую
+помощь. changes_canon=true, если предложение может изменить положение, давление, факт или доступную возможность;
+такое изменение всё равно потребует обычной игровой карточки и подтверждения ведущего.
+
+Не передавай свои рассуждения игровой модели, не раскрывай тайну игрокам и не превращай авторский маршрут в список
+правильных действий. Если поражение уже закономерно и достаточно обозначено, скажи ведущему честно завершить сцену,
+а не придумывай спасение. Возвращай только JSON по схеме, без Markdown."""
+
+
 COMPACT_AFTER_TURNS = 16
 COMPACT_AFTER_INPUT_TOKENS = 40_000
+DIRECTOR_PERIODIC_TURNS = 4
+
+
+def _progress_signature(capsule):
+    """Threat-only changes are pressure, not progress toward an informed new choice."""
+
+    value = Capsule.model_validate(capsule)
+    return tuple(
+        json.dumps(getattr(value, key), ensure_ascii=False, sort_keys=True)
+        for key in (
+            "scene",
+            "hero",
+            "inventory",
+            "known",
+            "commitments",
+            "npcs",
+            "pending_intents",
+        )
+    )
+
+
+def _intent_words(text):
+    return {word for word in re.findall(r"[\wёЁ]+", text.lower()) if len(word) >= 4}
+
+
+def _same_intent(left, right):
+    a, b = _intent_words(left), _intent_words(right)
+    return bool(a and b and len(a & b) / min(len(a), len(b)) >= 0.6)
+
+
+def director_signals(state):
+    """Cheap gates keep the observer sparse; the model judges meaning only after a gate fires."""
+
+    events = state.get("events", [])
+    if not events:
+        return []
+    signals = []
+    failure_streak = 0
+    for item in reversed(events):
+        roll = item.get("roll")
+        if roll and roll.get("success") is False:
+            failure_streak += 1
+        else:
+            break
+    if failure_streak >= 2:
+        signals.append(f"{failure_streak} проверок подряд закончились неудачей")
+
+    no_progress = 0
+    for item in reversed(events):
+        if item.get("meaningful_progress", True):
+            break
+        no_progress += 1
+    if no_progress >= 3:
+        signals.append(f"{no_progress} принятых ходов подряд не изменили доступный выбор")
+
+    if len(events) >= 2 and _same_intent(events[-1].get("input", ""), events[-2].get("input", "")):
+        signals.append("последние две заявки семантически похожи")
+
+    seen = state.get("director_seen_events", 0)
+    if len(events) - seen >= DIRECTOR_PERIODIC_TURNS:
+        signals.append(f"плановая оценка после {len(events) - seen} новых принятых ходов")
+    return signals
 
 
 def apply_capsule_delta(capsule, delta):
@@ -194,20 +299,31 @@ def initial_state(dossier=None):
         "compaction": None,
         "model_updates": [],
         "remind_dossier": False,
+        "director_session_id": None,
+        "director_turns": 0,
+        "director_seen_events": 0,
+        "director": {"phase": "idle"},
         "calls": [],
         "created": time.time(),
     }
 
 
 class GameStudio:
-    def __init__(self, directory, provider=None):
+    def __init__(self, directory, provider=None, observer_provider=None):
         directory = Path(directory).resolve()
         self.store = Store(directory / "studio.sqlite3")
         local_cli = directory / "codex-cli/node_modules/.bin" / ("codex.cmd" if os.name == "nt" else "codex")
-        self.provider = provider or CodexProvider(executable=str(local_cli) if local_cli.is_file() else None)
+        executable = str(local_cli) if local_cli.is_file() else None
+        self.provider = provider or CodexProvider(executable=executable)
+        self.observer_provider = observer_provider or (
+            provider if provider is not None else CodexProvider(executable=executable)
+        )
         self.owns_provider = provider is None
+        self.owns_observer_provider = provider is None and observer_provider is None
         self.thread = None
         self.cancel = threading.Event()
+        self.director_thread = None
+        self.director_cancel = threading.Event()
         self.lock = threading.RLock()
         state = self.store.read()
         if state and any(
@@ -219,6 +335,10 @@ class GameStudio:
                 "compaction",
                 "model_updates",
                 "remind_dossier",
+                "director_session_id",
+                "director_turns",
+                "director_seen_events",
+                "director",
             )
         ):
             def migrate(current, db):
@@ -228,6 +348,10 @@ class GameStudio:
                 current.setdefault("compaction", None)
                 current.setdefault("model_updates", [])
                 current.setdefault("remind_dossier", False)
+                current.setdefault("director_session_id", None)
+                current.setdefault("director_turns", 0)
+                current.setdefault("director_seen_events", 0)
+                current.setdefault("director", {"phase": "idle"})
                 return current
 
             self.store.mutate(uid(), None, migrate)
@@ -257,6 +381,16 @@ class GameStudio:
                 return current
 
             self.store.mutate(uid(), None, interrupted_compaction)
+        state = self.store.read()
+        if state and (state.get("director") or {}).get("phase") == "planning":
+            def interrupted_director(current, db):
+                current["director"] = {
+                    "phase": "error",
+                    "error": "Наблюдение было прервано перезапуском. Игра не изменена.",
+                }
+                return current
+
+            self.store.mutate(uid(), None, interrupted_director)
 
     def view(self):
         return {
@@ -265,12 +399,17 @@ class GameStudio:
             "model": self.store.get_meta("model", DEFAULT_MODEL),
             "models": WORLD_MODELS,
             "busy": bool(self.thread and self.thread.is_alive()),
+            "director_busy": bool(self.director_thread and self.director_thread.is_alive()),
         }
 
     def set_model(self, model):
         with self.lock:
             require(model in WORLD_MODELS, "Выберите модель из списка.")
             require(not (self.thread and self.thread.is_alive()), "Дождитесь ответа помощника.")
+            require(
+                not (self.director_thread and self.director_thread.is_alive()),
+                "Дождитесь оценки режиссёрского наблюдателя.",
+            )
             self.store.set_meta("model", model)
             return self.view()
 
@@ -298,16 +437,32 @@ class GameStudio:
 
         return self.store.mutate(uid(), None, change)
 
+    def _mutate_director(self, request_id, fn):
+        def change(state, db):
+            require(
+                state
+                and state.get("director")
+                and state["director"].get("id") == request_id,
+                "Режиссёрское наблюдение уже изменилось.",
+            )
+            fn(state["director"])
+            return state
+
+        return self.store.mutate(uid(), None, change)
+
     def command(self, kind, data, command_id, revision):
         with self.lock:
             if self.store.seen(command_id):
                 return self.view()
             run = None
+            run_director = False
+            cancel_director = False
 
             def change(state, db):
-                nonlocal run
+                nonlocal run, run_director, cancel_director
                 if kind == "new":
                     require(not (self.thread and self.thread.is_alive()), "Дождитесь завершения запроса.")
+                    cancel_director = True
                     if state:
                         db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", ("previous-studio", encode(state)))
                     return initial_state()
@@ -326,6 +481,9 @@ class GameStudio:
                     require(not (self.thread and self.thread.is_alive()), "Дождитесь текущего ответа.")
                     if mode == "action":
                         require(not pending, "Сначала примите или отклоните текущую карточку.")
+                        if (state.get("director") or {}).get("phase") == "planning":
+                            cancel_director = True
+                        state["director"] = {"phase": "idle"}
                         state["pending"] = {
                             "id": uid(),
                             "phase": "planning",
@@ -374,7 +532,8 @@ class GameStudio:
                         if apply_capsule
                         else Capsule.model_validate(state["capsule"])
                     )
-                    old_scene = state["capsule"]["scene"]
+                    old_capsule = deepcopy(state["capsule"])
+                    old_scene = old_capsule["scene"]
                     before = deepcopy(state)
                     before["pending"] = None
                     db.execute(
@@ -386,6 +545,7 @@ class GameStudio:
                     state["transcript"].append({"role": "player", "text": player_text})
                     if text.strip():
                         state["transcript"].append({"role": "gm", "text": text.strip()})
+                    state["capsule"] = next_capsule.model_dump()
                     state["events"].append(
                         {
                             "id": uid(),
@@ -395,9 +555,11 @@ class GameStudio:
                             "roll": pending.get("roll"),
                             "introduced_details": outcome.get("introduced_details", []),
                             "memory_applied": apply_capsule,
+                            "meaningful_progress": _progress_signature(old_capsule)
+                            != _progress_signature(state["capsule"]),
+                            "scene_changed": old_scene != state["capsule"]["scene"],
                         }
                     )
-                    state["capsule"] = next_capsule.model_dump()
                     state["pending"] = None
                     state["director_note"] = ""
                     state["model_updates"].append(
@@ -441,6 +603,20 @@ class GameStudio:
                             "after_turn": state.get("model_turns", 0),
                         }
                         run = "compact"
+                    signals = director_signals(state)
+                    if (
+                        signals
+                        and (state.get("director") or {}).get("phase") != "planning"
+                        and not (self.director_thread and self.director_thread.is_alive())
+                    ):
+                        state["director"] = {
+                            "id": uid(),
+                            "phase": "planning",
+                            "trigger": signals,
+                            "basis_event_count": len(state["events"]),
+                            "model": self.store.get_meta("model", DEFAULT_MODEL),
+                        }
+                        run_director = True
                 elif kind == "reject":
                     require(pending is not None, "Нет карточки для отклонения.")
                     state["model_updates"].append(
@@ -487,6 +663,9 @@ class GameStudio:
                         }
                     )
                     state["model_updates"] = state["model_updates"][-12:]
+                    if (state.get("director") or {}).get("phase") == "planning":
+                        cancel_director = True
+                    state["director"] = {"phase": "idle"}
                 elif kind == "direct":
                     text = data.get("text", "")
                     require(
@@ -494,6 +673,71 @@ class GameStudio:
                         "Указание ведущего: до 800 символов.",
                     )
                     state["director_note"] = text.strip()
+                    director_phase = (state.get("director") or {}).get("phase")
+                    if text.strip() and director_phase == "ready":
+                        state["director_seen_events"] = len(state["events"])
+                        state["director"] = {
+                            "phase": "applied",
+                            "choice": {"label": "Своё указание ведущего"},
+                        }
+                    elif not text.strip() and director_phase == "applied":
+                        state["director"] = {"phase": "idle"}
+                elif kind == "director_request":
+                    require(not pending and not assistant, "Сначала завершите текущую карточку или вопрос.")
+                    require(not (self.thread and self.thread.is_alive()), "Дождитесь ответа игровой модели.")
+                    require(
+                        not (self.director_thread and self.director_thread.is_alive()),
+                        "Наблюдатель уже оценивает игру.",
+                    )
+                    state["director"] = {
+                        "id": uid(),
+                        "phase": "planning",
+                        "trigger": ["ведущий запросил оценку"],
+                        "basis_event_count": len(state["events"]),
+                        "model": self.store.get_meta("model", DEFAULT_MODEL),
+                    }
+                    run_director = True
+                elif kind == "director_cancel":
+                    require(
+                        (state.get("director") or {}).get("phase") == "planning",
+                        "Нет текущего наблюдения.",
+                    )
+                    state["director"] = {"phase": "idle"}
+                    cancel_director = True
+                elif kind == "director_dismiss":
+                    director_phase = (state.get("director") or {}).get("phase")
+                    require(
+                        director_phase in {"ready", "error", "applied"},
+                        "Нет режиссёрской оценки.",
+                    )
+                    if director_phase == "applied":
+                        state["director_note"] = ""
+                    state["director_seen_events"] = len(state["events"])
+                    state["director"] = {"phase": "idle"}
+                elif kind == "director_choose":
+                    director = state.get("director") or {}
+                    pulse = director.get("pulse") or {}
+                    require(
+                        director.get("phase") == "ready" and pulse.get("status") == "decision",
+                        "Наблюдатель не предложил решения.",
+                    )
+                    move_kind = data.get("kind")
+                    move = next(
+                        (item for item in pulse.get("moves", []) if item.get("kind") == move_kind),
+                        None,
+                    )
+                    require(move is not None, "Выберите доступный режиссёрский ход.")
+                    canon_note = (
+                        " Возможное изменение канона должно пройти обычную карточку и подтверждение ведущего."
+                        if move["changes_canon"]
+                        else ""
+                    )
+                    state["director_note"] = (
+                        f"Режиссёрское намерение «{move['label']}»: {move['instruction']} "
+                        f"Цена или ограничение: {move['tradeoff']}.{canon_note}"
+                    )[:800]
+                    state["director_seen_events"] = len(state["events"])
+                    state["director"] = {"phase": "applied", "choice": move}
                 elif kind == "remind":
                     require(not (self.thread and self.thread.is_alive()), "Дождитесь ответа помощника.")
                     state["remind_dossier"] = True
@@ -531,6 +775,11 @@ class GameStudio:
                         }
                     ]
                     restored["model_updates"] = restored["model_updates"][-12:]
+                    restored["director_session_id"] = None
+                    restored["director_turns"] = 0
+                    restored["director_seen_events"] = 0
+                    restored["director"] = {"phase": "idle"}
+                    cancel_director = True
                     db.execute("DELETE FROM checkpoints WHERE id=?", (row["id"],))
                     return restored
                 else:
@@ -540,6 +789,8 @@ class GameStudio:
             result = self.store.mutate(command_id, revision, change)
             if kind == "cancel":
                 self.cancel.set()
+            if cancel_director:
+                self.director_cancel.set()
             if run:
                 self.cancel = threading.Event()
                 snapshot = deepcopy(result)
@@ -554,6 +805,16 @@ class GameStudio:
                     name="studio-" + run,
                 )
                 self.thread.start()
+            if run_director:
+                self.director_cancel = threading.Event()
+                snapshot = deepcopy(result)
+                self.director_thread = threading.Thread(
+                    target=self._work_director,
+                    args=(snapshot, self.director_cancel),
+                    daemon=True,
+                    name="studio-director",
+                )
+                self.director_thread.start()
             return self.view()
 
     @staticmethod
@@ -567,6 +828,59 @@ class GameStudio:
             return StudioTurn.model_validate_json(value)
         except (ValueError, TypeError) as exc:
             raise GameError("Живая модель нарушила формат ответа. Память не изменена.") from exc
+
+    @staticmethod
+    def _parse_director(text):
+        value = text.strip()
+        if value.startswith("```"):
+            lines = value.splitlines()
+            if lines and lines[-1].strip() == "```":
+                value = "\n".join(lines[1:-1])
+        try:
+            pulse = DirectorPulse.model_validate_json(value)
+        except (ValueError, TypeError) as exc:
+            raise GameError("Наблюдатель нарушил формат ответа. Игра не изменена.") from exc
+        if pulse.status == "decision":
+            require(1 <= len(pulse.moves) <= 3, "Наблюдатель должен предложить от одного до трёх ходов.")
+            require(
+                len({move.kind for move in pulse.moves}) == len(pulse.moves),
+                "Наблюдатель повторил один и тот же режиссёрский ход.",
+            )
+        else:
+            require(not pulse.moves, "Наблюдатель предложил вмешательство без решения ведущего.")
+        return pulse
+
+    def _director_prompt(self, state):
+        director = state["director"]
+        seen = state.get("director_seen_events", 0)
+        events = state.get("events", [])
+        blocks = []
+        if not state.get("director_session_id"):
+            blocks.extend(
+                [
+                    DIRECTOR_OBSERVER,
+                    "Режиссёрское досье. Это служебная истина:\n"
+                    + json.dumps(load_dossier(), ensure_ascii=False),
+                    "Принятый игровой диалог к началу наблюдения:\n"
+                    + json.dumps(state["transcript"][-20:], ensure_ascii=False),
+                ]
+            )
+        else:
+            blocks.append(
+                "Продолжай ту же независимую режиссёрскую беседу. Не пересказывай прежнюю оценку."
+            )
+        blocks.extend(
+            [
+                "Текущая авторитетная капсула:\n"
+                + json.dumps(state["capsule"], ensure_ascii=False),
+                "Новые подтверждённые события после последней оценки:\n"
+                + json.dumps(events[seen:], ensure_ascii=False),
+                "Причины запуска наблюдения:\n"
+                + json.dumps(director.get("trigger", []), ensure_ascii=False),
+                "Оцени процесс сейчас. Не продолжай сцену и не меняй игру.",
+            ]
+        )
+        return "\n\n".join(blocks)
 
     def _prompt(self, state, mode, text):
         tag = {"action": "Иво", "advice": "Совет", "meta": "Мета"}[mode]
@@ -756,6 +1070,65 @@ class GameStudio:
         finally:
             self._record_call(state["id"], request_id, request["mode"], details)
 
+    def _work_director(self, state, cancel):
+        director = state["director"]
+        request_id = director["id"]
+        basis_event_count = director["basis_event_count"]
+        details = {"status": "error"}
+        response_received = False
+        try:
+            text, details = self.observer_provider.conversation(
+                self._director_prompt(state),
+                cancel,
+                model=director.get("model", ""),
+                session_id=state.get("director_session_id"),
+                schema_class=DirectorPulse,
+            )
+            response_received = True
+            pulse = self._parse_director(text)
+            require(not cancel.is_set(), "Наблюдение отменено.")
+
+            def finish(current, db):
+                require(
+                    current
+                    and (current.get("director") or {}).get("id") == request_id
+                    and current["director"].get("phase") == "planning",
+                    "Режиссёрское наблюдение уже изменилось.",
+                )
+                require(
+                    len(current.get("events", [])) == basis_event_count and not current.get("pending"),
+                    "Оценка устарела после нового игрового хода.",
+                )
+                current["director"] = {
+                    "phase": "ready",
+                    "pulse": pulse.model_dump(),
+                    "trigger": director.get("trigger", []),
+                    "basis_event_count": basis_event_count,
+                }
+                current["director_session_id"] = details["session_id"]
+                current["director_turns"] = current.get("director_turns", 0) + 1
+                current["director_seen_events"] = basis_event_count
+                return current
+
+            self.store.mutate(uid(), None, finish)
+            details["status"] = "completed"
+        except Exception as exc:
+            details["status"] = "rejected" if response_received else "error"
+            message = (
+                str(exc)
+                if isinstance(exc, GameError)
+                else "Не удалось получить режиссёрскую оценку. Игра не изменена."
+            )
+            try:
+                self._mutate_director(
+                    request_id,
+                    lambda item: item.update(phase="error", error=message),
+                )
+            except GameError:
+                pass
+        finally:
+            self._record_call(state["id"], request_id, "director", details)
+
     def _work_compact(self, state, cancel):
         compaction = state.get("compaction") or {}
         request_id = compaction.get("id")
@@ -801,7 +1174,12 @@ class GameStudio:
 
     def close(self):
         self.cancel.set()
+        self.director_cancel.set()
         if self.thread:
             self.thread.join(timeout=12)
+        if self.director_thread:
+            self.director_thread.join(timeout=12)
         if self.owns_provider:
             self.provider.close()
+        if self.owns_observer_provider and self.observer_provider is not self.provider:
+            self.observer_provider.close()

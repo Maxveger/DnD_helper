@@ -22,7 +22,9 @@ class Service:
         self.engine = Engine(self.store, adventures=self.adventures)
         self.provider = OpenAIProvider(self.config, self.store)
         self.free_world = FreeWorld(directory)
-        self.studio = GameStudio(directory, provider=self.free_world.provider)
+        # Studio owns two independent conversational providers: the strict game
+        # and the optional director observer must be able to run concurrently.
+        self.studio = GameStudio(directory)
         self.bot = TelegramBot(self)
         self.stop_event = threading.Event()
         self.worker = None

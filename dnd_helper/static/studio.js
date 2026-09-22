@@ -33,6 +33,52 @@ function labelsForDifficulty(value){return {easy:'10 · простая',standard
 
 function renderPrivate(state){const root=$('private-history');root.replaceChildren();for(const item of state.side_chat.slice(-8)){const entry=node('div','','private-entry');entry.append(node('span',item.mode==='meta'?'Мета:':'Совет:','tag'));entry.append(node('p',item.input));entry.append(node('p',item.answer));if(item.observations?.length){const ul=node('ul');for(const value of item.observations)ul.append(node('li',value));entry.append(ul);}root.append(entry);}const pending=state.assistant_pending,box=$('private-pending');box.replaceChildren();box.hidden=!pending;if(pending){if(pending.phase==='planning'){box.append(node('div','Модель думает…','loader'));button(box,'Отменить',()=>command('cancel',{target:'chat'}),'quiet');}else{box.append(node('p',pending.error));button(box,'Повторить',()=>command('retry',{target:'chat'}),'primary');button(box,'Убрать',()=>command('cancel',{target:'chat'}),'quiet');}}}
 
+function renderDirector(state){
+  const root=$('pulse-content'),badge=$('pulse-status'),director=state.director||{phase:'idle'};
+  root.replaceChildren();badge.className='pulse-status';
+  const controls=node('div','','buttons pulse-controls');
+  if(director.phase==='idle'){
+    badge.textContent='тихо';
+    root.append(node('p','Наблюдатель не вмешивается. Строгая игровая модель работает как прежде.','muted'));
+    const ask=button(controls,'Оценить сейчас',()=>command('director_request'));
+    ask.disabled=sending||view.busy||!!state.pending||!!state.assistant_pending||!connected;
+    root.append(controls);return;
+  }
+  if(director.phase==='planning'){
+    badge.textContent='наблюдает';badge.classList.add('working');
+    root.append(node('div','Проверяет темп, ясность выбора и давление…','loader'));
+    root.append(node('p','Игроки могут продолжать обсуждение; новое действие отменит устаревшую оценку.','muted'));
+    button(controls,'Отменить',()=>command('director_cancel'),'quiet');root.append(controls);return;
+  }
+  if(director.phase==='error'){
+    badge.textContent='ошибка';badge.classList.add('warning');
+    root.append(node('p',director.error||'Оценка не получена. Игра не изменена.'));
+    button(controls,'Повторить',()=>command('director_request'));
+    button(controls,'Закрыть',()=>command('director_dismiss'),'quiet');root.append(controls);return;
+  }
+  if(director.phase==='applied'){
+    badge.textContent='выбрано';badge.classList.add('decision');
+    root.append(node('strong',director.choice?.label||'Режиссёрский ход'));
+    root.append(node('p','Указание уйдёт только в следующую игровую карточку. Каноном оно станет лишь после вашего подтверждения.','muted'));
+    button(controls,'Убрать указание',()=>command('director_dismiss'),'quiet');root.append(controls);return;
+  }
+  const pulse=director.pulse||{};
+  const statusLabel={steady:'ровно',watch:'наблюдать',decision:'решение'}[pulse.status]||'оценка';
+  badge.textContent=statusLabel;badge.classList.add(pulse.status||'');
+  root.append(node('p',pulse.observation||'','pulse-observation'));
+  if(pulse.evidence?.length){const evidence=node('ul','','pulse-evidence');for(const item of pulse.evidence)evidence.append(node('li',item));root.append(evidence);}
+  if(pulse.risk)root.append(node('p','Риск: '+pulse.risk,'pulse-risk'));
+  root.append(node('p',`Срочность: ${{low:'низкая',medium:'средняя',high:'высокая'}[pulse.urgency]||pulse.urgency} · уверенность: ${{low:'низкая',medium:'средняя',high:'высокая'}[pulse.confidence]||pulse.confidence}`,'muted'));
+  for(const move of pulse.moves||[]){
+    const card=node('article','','pulse-move');card.append(node('strong',move.label));card.append(node('p',move.purpose));card.append(node('p','Ограничение: '+move.tradeoff,'muted'));
+    if(move.changes_canon)card.append(node('span','может изменить канон','canon-flag'));
+    const use=button(card,'Выбрать',()=>command('director_choose',{kind:move.kind}),'primary');use.disabled=sending||view.busy||!!state.pending;root.append(card);
+  }
+  button(controls,pulse.status==='decision'?'Оставить строго':'Закрыть оценку',()=>command('director_dismiss'),'quiet');
+  if(pulse.status!=='steady')button(controls,'Своё указание',()=>{$('director-note').focus();$('director-note').scrollIntoView({block:'center'});});
+  root.append(controls);
+}
+
 function renderCalls(state){const root=$('calls');root.replaceChildren();for(const call of state.calls.slice(-12).reverse()){const usage=call.turn_usage||call.usage||{};const timing=call.first_event_seconds===undefined?'':` · событие ${call.first_event_seconds??'?'} с${call.first_output_seconds!=null?` · текст ${call.first_output_seconds} с`:''}`;root.append(node('div',`${call.mode} · ${call.status||'отклонён'}${timing} · полностью ${call.seconds??'?'} с · ${usage.input_tokens??'?'} / ${usage.output_tokens??'?'} токенов хода`,'call'));}}
 
 function renderDossier(d){const root=$('dossier-content');root.replaceChildren();const intro=node('section');intro.append(node('p',d.scope));root.append(intro);for(const [title,values] of [['Неизменные истины',d.immutable_truths],['Свобода модели',d.freedom],['Сторожевые напоминания',d.watchpoints]]){const section=node('section');section.append(node('h2',title));const ul=node('ul');for(const value of values)ul.append(node('li',value));section.append(ul);root.append(section);}const cast=node('section');cast.append(node('h2','Персонажи'));for(const person of d.cast){cast.append(node('h3',person.name));cast.append(node('p',person.public));cast.append(node('p','Цель: '+person.goal));cast.append(node('p','Публичная позиция: '+person.public_position,'muted'));}root.append(cast);const situations=node('section');situations.append(node('h2','Ситуации'));for(const item of d.situations){situations.append(node('h3',item.title));situations.append(node('p',item.physical));}root.append(situations);}
@@ -40,7 +86,7 @@ function renderDossier(d){const root=$('dossier-content');root.replaceChildren()
 function fillCapsuleDialog(capsule){$('cap-scene').value=capsule.scene;const root=$('capsule-fields');root.replaceChildren();for(const [key,label] of Object.entries(labels)){const lab=node('label',label);lab.htmlFor='cap-'+key;const textarea=node('textarea');textarea.id='cap-'+key;textarea.rows=3;textarea.value=(capsule[key]||[]).join('\n');root.append(lab,textarea);}}
 function capsuleFromDialog(){const value={scene:$('cap-scene').value.trim()};for(const key of Object.keys(labels))value[key]=$('cap-'+key).value.split('\n').map(x=>x.trim()).filter(Boolean);return value;}
 
-function render(force=false){if(!view)return;const signature=JSON.stringify(view);if(!force&&signature===lastSignature)return;lastSignature=signature;const state=view.studio;document.body.classList.toggle('session-open',!!state);$('welcome').hidden=!!state;$('workspace').hidden=!state;if($('model').options.length!==Object.keys(view.models||{}).length){$('model').replaceChildren();for(const [id,label] of Object.entries(view.models||{})){const option=node('option',label);option.value=id;$('model').append(option);}}$('model').value=view.model;if(!state){renderDossier(view.dossier);return;}const gameSignature=JSON.stringify([state.transcript,state.pending]);$('title').textContent=view.dossier.title;renderTranscript(state);renderCapsule(state.capsule);renderPending(state);renderPrivate(state);renderCalls(state);renderDossier(view.dossier);$('director-note').value=state.director_note||'';const blocked=!!state.pending||view.busy;$('send-action').disabled=sending||blocked||!connected;$('action').disabled=sending||!!state.pending;$('action-status').textContent=!connected?'Подключите Codex в настройках.':view.busy?(state.compaction?.phase==='planning'?'Сжимаем историю между сценами; действие уже можно набрать.':'Ждём ответ модели.'):state.pending?'Сначала завершите карточку.':'';$('undo').disabled=sending||!!state.pending||view.busy||!state.events.length;$('edit-capsule').disabled=!!state.pending||view.busy;$('send-private').disabled=sending||!!state.assistant_pending||view.busy||!connected;$('private-input').disabled=sending||!!state.assistant_pending||!connected;$('save-direction').disabled=sending||view.busy;$('remind-dossier').disabled=sending||view.busy;$('reset-model').disabled=sending||view.busy||!!state.pending||!!state.assistant_pending;let memory=state.model_session_id?`Одна живая беседа · ${state.model_turns||0} ответов модели.`:'Беседа модели начнётся со следующей реплики.';if(state.compaction?.phase==='planning')memory+=' История сжимается в фоне между сценами.';else if(state.compaction?.phase==='completed')memory+=` История сжата после ${state.compaction.after_turn} ответа.`;else if(state.compaction?.phase==='error')memory+=' Сжатие не удалось; игра сохранена и может продолжаться.';$('model-memory-status').textContent=memory+(state.remind_dossier?' Досье будет приложено к следующей реплике.':'');if(gameSignature!==lastGameSignature&&matchMedia('(min-width: 761px)').matches){requestAnimationFrame(()=>{if(state.pending&&state.pending.phase!=='planning')$('pending').scrollIntoView({block:'start'});else $('game-stream').scrollTop=$('game-stream').scrollHeight;});}lastGameSignature=gameSignature;}
+function render(force=false){if(!view)return;const signature=JSON.stringify(view);if(!force&&signature===lastSignature)return;lastSignature=signature;const state=view.studio;document.body.classList.toggle('session-open',!!state);$('welcome').hidden=!!state;$('workspace').hidden=!state;if($('model').options.length!==Object.keys(view.models||{}).length){$('model').replaceChildren();for(const [id,label] of Object.entries(view.models||{})){const option=node('option',label);option.value=id;$('model').append(option);}}$('model').value=view.model;if(!state){renderDossier(view.dossier);return;}const gameSignature=JSON.stringify([state.transcript,state.pending]);$('title').textContent=view.dossier.title;renderTranscript(state);renderCapsule(state.capsule);renderPending(state);renderDirector(state);renderPrivate(state);renderCalls(state);renderDossier(view.dossier);$('director-note').value=state.director_note||'';const blocked=!!state.pending||view.busy;$('send-action').disabled=sending||blocked||!connected;$('action').disabled=sending||!!state.pending;$('action-status').textContent=!connected?'Подключите Codex в настройках.':view.busy?(state.compaction?.phase==='planning'?'Сжимаем историю между сценами; действие уже можно набрать.':'Ждём ответ модели.'):state.pending?'Сначала завершите карточку.':'';$('undo').disabled=sending||!!state.pending||view.busy||!state.events.length;$('edit-capsule').disabled=!!state.pending||view.busy;$('send-private').disabled=sending||!!state.assistant_pending||view.busy||!connected;$('private-input').disabled=sending||!!state.assistant_pending||!connected;$('save-direction').disabled=sending||view.busy;$('remind-dossier').disabled=sending||view.busy;$('reset-model').disabled=sending||view.busy||!!state.pending||!!state.assistant_pending;let memory=state.model_session_id?`Одна живая беседа · ${state.model_turns||0} ответов модели.`:'Беседа модели начнётся со следующей реплики.';if(state.compaction?.phase==='planning')memory+=' История сжимается в фоне между сценами.';else if(state.compaction?.phase==='completed')memory+=` История сжата после ${state.compaction.after_turn} ответа.`;else if(state.compaction?.phase==='error')memory+=' Сжатие не удалось; игра сохранена и может продолжаться.';$('model-memory-status').textContent=memory+(state.remind_dossier?' Досье будет приложено к следующей реплике.':'');if(gameSignature!==lastGameSignature&&matchMedia('(min-width: 761px)').matches){requestAnimationFrame(()=>{if(state.pending&&state.pending.phase!=='planning')$('pending').scrollIntoView({block:'start'});else $('game-stream').scrollTop=$('game-stream').scrollHeight;});}lastGameSignature=gameSignature;}
 
 async function connection(){$('check-login').disabled=true;try{const status=await api('codex/status');connected=status.ready;$('connection-status').textContent=status.message;$('welcome-connection').textContent=status.ready?'Живая модель подключена.':'Для игры подключите Codex в настройках.';}catch(error){connected=false;showError(error);}finally{$('check-login').disabled=false;render(true);}}
 

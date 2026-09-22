@@ -10,7 +10,7 @@ from pathlib import Path
 import uvicorn
 from playwright.sync_api import expect, sync_playwright
 
-from dnd_helper.studio import StudioCard, StudioTurn
+from dnd_helper.studio import DirectorMove, DirectorPulse, StudioCard, StudioTurn
 from dnd_helper.web import create_app
 
 
@@ -28,7 +28,26 @@ class Stub:
         self.calls.append(
             {"prompt": prompt, "session_id": session_id, "schema_class": schema_class}
         )
-        if "\nСовет:" in prompt:
+        if schema_class is DirectorPulse:
+            turn = DirectorPulse(
+                status="decision",
+                observation="Игра движется, но ведущий может сделать следующий выбор нагляднее.",
+                evidence=["Иво получил план Дома."],
+                risk="Без акцента игрок может не заметить уже известный вход.",
+                urgency="low",
+                confidence="medium",
+                moves=[
+                    DirectorMove(
+                        kind="highlight",
+                        label="Подсветить известный вход",
+                        purpose="Вернуть игроку уже полученную деталь.",
+                        instruction="Упомяни известный служебный вход, не выбирая его за героя.",
+                        tradeoff="Не раскрывай охрану и не гарантируй проникновение.",
+                        changes_canon=False,
+                    )
+                ],
+            )
+        elif "\nСовет:" in prompt:
             turn = StudioTurn(
                 kind="chat",
                 card=None,
@@ -68,7 +87,11 @@ class Stub:
         return turn.model_dump_json(), {
             "seconds": 0.1,
             "usage": {"input_tokens": 100, "output_tokens": 50},
-            "session_id": session_id or "11111111-1111-1111-1111-111111111111",
+            "session_id": session_id or (
+                "22222222-2222-2222-2222-222222222222"
+                if schema_class is DirectorPulse
+                else "11111111-1111-1111-1111-111111111111"
+            ),
         }
 
 
@@ -78,6 +101,7 @@ def main():
         stub = Stub()
         app.state.service.free_world.provider = stub
         app.state.service.studio.provider = stub
+        app.state.service.studio.observer_provider = stub
         sock = socket.socket()
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -119,6 +143,13 @@ def main():
                 )
                 assert page.evaluate("document.body.scrollHeight <= innerHeight + 1")
                 expect(page.locator("#action")).to_be_in_viewport()
+
+                page.get_by_role("button", name="Оценить сейчас").click()
+                expect(page.locator("#pulse-content")).to_contain_text("следующий выбор нагляднее")
+                expect(page.get_by_role("button", name="Выбрать")).to_be_visible()
+                page.get_by_role("button", name="Выбрать").click()
+                expect(page.locator("#pulse-content")).to_contain_text("Указание уйдёт только")
+                assert "известный служебный вход" in page.locator("#director-note").input_value()
 
                 page.locator("#private-input").fill("Сайрус уже дал задаток?")
                 page.locator("#send-private").click()
